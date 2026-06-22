@@ -1,0 +1,44 @@
+# =========================
+# CORE AI STACK (FIXED)
+# =========================
+numpy==1.24.4
+keras==2.15.0
+ml-dtypes==0.2.0
+protobuf==4.25.8
+tensorflow==2.15.0
+grpcio-status==1.59.0
+
+# =========================
+# COMPUTER VISION
+# =========================
+opencv-python==4.8.1.78
+deepface==0.0.79
+
+# =========================
+# SPEECH & AUDIO
+# =========================
+SpeechRecognition
+pyttsx3
+pyaudio==0.2.11   
+
+# =========================
+# GOOGLE GEMINI (COMPATIBLE)
+# =========================
+google-generativeai==0.3.2
+
+# =========================
+# FIREBASE
+# =========================
+firebase-admin
+pyrebase4
+
+# =========================
+# UI
+# =========================
+streamlit
+streamlit-authenticator
+
+# =========================
+# REPORT GENERATION
+# =========================
+reportlab
