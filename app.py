@@ -144,7 +144,7 @@ def firebase_login(email: str, password: str) -> bool:
         else:
             st.error(f"❌ Login failed: {err}")
         return False
-
+  
     try:
         snapshot = realtime_db.reference(f"users/{uid}").get()
         if snapshot:
