@@ -149,7 +149,7 @@ Respond ONLY with a valid JSON array (no markdown):
     "question": "...",
     "category": "Technical|Behavioral|HR",
     "expected_keywords": ["kw1", "kw2", "kw3"]
-  }}
+  }}  
 ]"""
 
     try:
@@ -307,6 +307,7 @@ def _inject_interview_css():
   transition: width 0.4s ease;
 }
 
+                
 /* Mic button */
 .iv-mic-wrap {
   display: flex;
