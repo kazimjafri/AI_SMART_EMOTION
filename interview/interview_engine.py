@@ -153,7 +153,7 @@ Respond ONLY with a valid JSON array (no markdown):
 ]"""
 
     try:
-        api_key = os.environ.get("GEMINI_API_KEY", "")
+        api_key = os.environ.get("GEMINI_API_KEY", "")    
         if not api_key:
             raise ValueError("No key")
 

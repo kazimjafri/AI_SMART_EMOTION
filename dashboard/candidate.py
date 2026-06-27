@@ -775,7 +775,7 @@ def application_history_tab():
                 f'<div><div class="nb-title">Interview deadline passed for <strong>{nc.get("job_title","—")}</strong> at {nc.get("company_name","—")} — session cancelled</div>'
                 f'<div class="nb-sub">// you did not complete the interview within 48 hours</div></div>'
                 f'</div>', unsafe_allow_html=True
-            )
+            )   
 
     if notifications:
         st.markdown('<div class="section-heading">🔔 What\'s new</div>', unsafe_allow_html=True)

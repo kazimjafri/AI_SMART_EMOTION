@@ -142,7 +142,7 @@ def firebase_login(email: str, password: str) -> bool:
         elif "USER_DISABLED" in err:
             st.error("🚫 This account has been disabled.")
         else:
-            st.error(f"❌ Login failed: {err}")
+            st.error(f"❌ Login failed: {err}")   
         return False
   
     try:

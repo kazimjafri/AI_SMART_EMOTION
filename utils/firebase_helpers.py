@@ -59,7 +59,7 @@ def load_candidate_applications(uid: str) -> list:
     apps = []
     for key, val in snapshot.items():
         val['key'] = key
-        apps.append(val)
+        apps.append(val)  
     return sorted(apps, key=lambda x: x.get("applied_at", ""), reverse=True)
 
 # --- 3. RECRUITER HELPERS ---
