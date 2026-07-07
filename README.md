@@ -1,4 +1,5 @@
 - AI Smart Emotion Interviewer
+
 An intelligent AI-based interview simulation system that analyzes both what a candidate says and how they feel, combining AI-generated questions, real-time facial emotion detection, and voice analysis to give data-driven interview feedback.
 
 
@@ -6,7 +7,7 @@ An intelligent AI-based interview simulation system that analyzes both what a ca
 Traditional mock interviews rely on subjective, manual feedback and ignore non-verbal cues like micro-expressions, stress, and speech clarity, even though most candidates fail interviews due to poor confidence and communication, not lack of skill.
 
 
-- Features
+Features
   
 - AI-Generated Questions — dynamic, role-specific question bank via Gemini/GPT API
 - Facial Emotion Tracking — real-time emotion detection using OpenCV & DeepFace
@@ -16,7 +17,7 @@ Traditional mock interviews rely on subjective, manual feedback and ignore non-v
 - Admin Dashboard — candidate overview, question bank management, candidate comparison tool
 
 
-- Tech Stack
+Tech Stack
 - Python
 - Streamlit
 - Streamlit-Authenticator
@@ -29,8 +30,7 @@ Traditional mock interviews rely on subjective, manual feedback and ignore non-v
 - FPDF/ReportLab
 
 
-- How It Works
-
+How It Works
 - Auth — User/Admin logs in securely
 - Questions: AI generates contextual questions based on job role & experience
 - Interview: Live video interface captures responses; AI asks questions audibly
@@ -39,7 +39,7 @@ Traditional mock interviews rely on subjective, manual feedback and ignore non-v
 - Report: Final PDF generated with scores and behavioral insights
 
 
-- Project Structure
+Project Structure
 - app.py               # Main entry point — Streamlit app
 - requirements.txt      # Python dependencies
 - .gitignore            # Files/folders excluded from Git
