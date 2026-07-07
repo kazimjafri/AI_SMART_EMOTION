@@ -3,7 +3,7 @@ An intelligent AI-based interview simulation system that analyzes both what a ca
 
 
 - Problem It Solves
-Traditional mock interviews rely on subjective, manual feedback and ignore non-verbal cues like micro-expressions, stress, and speech clarity — even though most candidates fail interviews due to poor confidence and communication, not lack of skill.
+Traditional mock interviews rely on subjective, manual feedback and ignore non-verbal cues like micro-expressions, stress, and speech clarity, even though most candidates fail interviews due to poor confidence and communication, not lack of skill.
 
 
 - Features
