@@ -1,5 +1,5 @@
 - AI Smart Emotion Interviewer
-An intelligent AI-based interview simulation system that analyzes both what a candidate says and how they feel — combining AI-generated questions, real-time facial emotion detection, and voice analysis to give data-driven interview feedback.
+An intelligent AI-based interview simulation system that analyzes both what a candidate says and how they feel, combining AI-generated questions, real-time facial emotion detection, and voice analysis to give data-driven interview feedback.
 
 
 - Problem It Solves
