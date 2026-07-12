@@ -74,17 +74,31 @@ _RTC_CONFIG = RTCConfiguration({
 
 def _get_webrtc_ctx():
     """
-    Renders the camera widget. The browser will show its native
-    "Allow camera access?" prompt the first time this runs for the
-    candidate. Returns the WebRTC context (or None if the component
-    failed to load, e.g. missing dependency).
+    Renders the camera widget with restricted size and layout control.
+    Uses CSS to ensure the widget stays compact and prevents duplicate key errors.
     """
+    # CSS injection to limit camera container size and ensure layout consistency
+    st.markdown("""
+        <style>
+        [data-testid="stWebRTC"] {
+            width: 100% !important;
+            max-width: 400px !important;
+            margin: 0 auto;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
     try:
+        # Optimized constraints: Resolution set to 400x300 for better performance
+        # on laptop hardware and to keep the camera widget compact.
         return webrtc_streamer(
             key="iv2_camera",
             mode=WebRtcMode.SENDRECV,
             rtc_configuration=_RTC_CONFIG,
-            media_stream_constraints={"video": True, "audio": True},
+            media_stream_constraints={
+                "video": {"width": {"ideal": 400}, "height": {"ideal": 300}},
+                "audio": True,
+            },
             video_processor_factory=EmotionVideoProcessor,
             audio_processor_factory=BrowserAudioRecorder,
             async_processing=True,
@@ -527,8 +541,10 @@ def _render_briefing(job_ctx: dict, profile: dict, webrtc_ctx):
             if webrtc_ctx and webrtc_ctx.video_processor:
                 webrtc_ctx.video_processor.reset()
 
-            with st.spinner("Generating your questions..."):
+            # --- MODERN ANIMATED SPINNER ---
+            with st.status("🤖 Generating role-specific questions...", expanded=True) as status:
                 questions = _generate_questions(profile, job_ctx)
+                status.update(label="✅ Questions ready!", state="complete", expanded=False)
 
             _set("questions",  questions)
             _set("current_q",  0)
@@ -548,6 +564,10 @@ def _render_briefing(job_ctx: dict, profile: dict, webrtc_ctx):
 # ───────────────────────────────────────────
 
 def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
+    """
+    Renders the question card and recording controls. 
+    Camera is already rendered in the parent column, so we just use the webrtc_ctx.
+    """
     questions = _ss("questions", [])
     current   = _ss("current_q", 0)
     total     = len(questions)
@@ -564,172 +584,76 @@ def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
     category  = q_obj.get("category",  "General")
     keywords  = q_obj.get("expected_keywords", [])
 
-    if not _camera_ready(webrtc_ctx):
-        st.warning("⚠️ Camera connection was lost. Your answers will still be scored, but emotion analysis may be incomplete.")
-
     # ── Header ──
     st.markdown(f"""
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;flex-wrap:wrap;gap:0.5rem;">
-      <div>
-        <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--text-muted);
-                     text-transform:uppercase;letter-spacing:2px;">
-          // {job_title}{f' · {company}' if company else ''}
-        </span>
-      </div>
-      <span style="font-family:'DM Mono',monospace;font-size:0.7rem;color:var(--text-mono);">
-        Q{current + 1} / {total}
-      </span>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+      <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--text-muted);
+                   text-transform:uppercase;letter-spacing:2px;">// {job_title}</span>
+      <span style="font-family:'DM Mono',monospace;font-size:0.7rem;color:var(--text-mono);">Q{current + 1} / {total}</span>
     </div>
     """, unsafe_allow_html=True)
 
     # Progress bar
     pct = int((current / total) * 100)
     st.markdown(f"""
-    <div class="iv-prog-wrap">
-      <div class="iv-prog-fill" style="width:{pct}%;"></div>
-    </div>
-    <div style="display:flex;justify-content:space-between;margin-bottom:1rem;">
-      <span style="font-family:'DM Mono',monospace;font-size:0.62rem;color:var(--text-muted);">
-        {current} answered
-      </span>
-      <span style="font-family:'DM Mono',monospace;font-size:0.62rem;color:var(--accent);">{pct}%</span>
-    </div>
+    <div class="iv-prog-wrap"><div class="iv-prog-fill" style="width:{pct}%;"></div></div>
     """, unsafe_allow_html=True)
 
     # ── QUESTION CARD ──
     st.markdown(f"""
     <div class="iv-q-card">
-      <div class="iv-q-eyebrow">
-        // question {current + 1}
-        <span class="iv-q-cat-badge">{category.upper()}</span>
-      </div>
+      <div class="iv-q-eyebrow">// question {current + 1} <span class="iv-q-cat-badge">{category.upper()}</span></div>
       <div class="iv-q-text">{q_text}</div>
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Previous score (if revisiting) ──
-    prev_score = _ss("scores", {}).get(current)
-    if prev_score:
-        cls = "iv-score-pass" if prev_score["correct"] else "iv-score-fail"
-        st.markdown(f"""
-        <div class="iv-score-card {cls}">
-          <div>
-            <div class="iv-score-num">{prev_score["score"]}</div>
-            <div class="iv-score-label">/ 100</div>
-          </div>
-          <div class="iv-score-feedback">{prev_score.get("feedback","")}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # ── Previous transcript (if any) ──
+    # ── Transcript / Score display ──
     prev_answer = _ss("answers", {}).get(current, "")
     if prev_answer:
-        st.markdown(
-            f'<div class="iv-transcript-label">// your recorded answer</div>'
-            f'<div class="iv-transcript">{prev_answer}</div>',
-            unsafe_allow_html=True
-        )
+        st.markdown(f'<div class="iv-transcript-label">// your recorded answer</div><div class="iv-transcript">{prev_answer}</div>', unsafe_allow_html=True)
 
-    # ── MIC BUTTON  (browser audio, via WebRTC) ──
-    st.markdown("<div style='height:0.5rem;'></div>", unsafe_allow_html=True)
-
+    # ── Recording Controls ──
     is_recording = _ss("is_recording", False)
-    mic_col1, mic_col2, mic_col3 = st.columns([1, 2, 1])
-
-    with mic_col2:
-        if not is_recording:
-            mic_label = "🎙️  Start Recording" if not prev_answer else "🔄  Re-record Answer"
-            if st.button(mic_label, use_container_width=True, key=f"iv2_mic_start_{current}"):
-                if webrtc_ctx and webrtc_ctx.audio_processor:
-                    webrtc_ctx.audio_processor.start_recording()
-                    _set("is_recording", True)
-                    st.rerun()
-                else:
-                    st.warning("⚠️ Microphone not connected — check the camera widget above.")
-        else:
-            st.markdown(
-                '<div style="text-align:center;color:#dc2626;font-family:\'DM Mono\',monospace;'
-                'font-size:0.72rem;margin-bottom:0.4rem;">🔴 Recording — speak your answer now</div>',
-                unsafe_allow_html=True
-            )
-            if st.button("⏹  Stop & Submit", use_container_width=True, key=f"iv2_mic_stop_{current}"):
-                audio_data = None
-                if webrtc_ctx and webrtc_ctx.audio_processor:
-                    audio_data = webrtc_ctx.audio_processor.stop_recording()
-                _set("is_recording", False)
-
-                if audio_data:
-                    with st.spinner("⚙️  Transcribing..."):
-                        transcript = transcribe_audio(audio_data)
+    if not is_recording:
+        btn_label = "🎙️ Start Recording" if not prev_answer else "🔄 Re-record Answer"
+        if st.button(btn_label, use_container_width=True, key=f"iv2_mic_start_{current}"):
+            if webrtc_ctx and webrtc_ctx.audio_processor:
+                webrtc_ctx.audio_processor.start_recording()
+                _set("is_recording", True)
+                st.rerun()
+            else:
+                st.warning("⚠️ Microphone not accessible.")
+    else:
+        st.markdown('<div style="text-align:center;color:#dc2626;font-family:\'DM Mono\',monospace;font-size:0.72rem;">🔴 Recording...</div>', unsafe_allow_html=True)
+        if st.button("⏹ Stop & Submit", use_container_width=True, key=f"iv2_mic_stop_{current}"):
+            audio_data = webrtc_ctx.audio_processor.stop_recording() if webrtc_ctx and webrtc_ctx.audio_processor else None
+            _set("is_recording", False)
+            if audio_data:
+                with st.status("Processing audio...", expanded=True) as status:
+                    transcript = transcribe_audio(audio_data)
                     if transcript:
-                        answers = _ss("answers", {})
-                        answers[current] = transcript
-                        _set("answers", answers)
-
-                        with st.spinner("⚙️  Evaluating your answer..."):
-                            score_result = evaluate_answer(
-                                question=q_text,
-                                answer=transcript,
-                                category=category,
-                                expected_keywords=keywords,
-                                job_title=job_title,
-                                company=company,
-                            )
-                        scores = _ss("scores", {})
-                        scores[current] = score_result
-                        _set("scores", scores)
+                        answers = _ss("answers", {}); answers[current] = transcript; _set("answers", answers)
+                        score_res = evaluate_answer(q_text, transcript, category, keywords, job_title, company)
+                        scores = _ss("scores", {}); scores[current] = score_res; _set("scores", scores)
+                        status.update(label="✅ Answer processed!", state="complete", expanded=False)
                     else:
-                        st.warning("⚠️ Could not transcribe. Please try again — speak clearly into your mic.")
-                else:
-                    st.warning("⚠️ No audio captured. Please try again.")
-                st.rerun()
+                        status.update(label="⚠️ Transcription failed.", state="error")
+            st.rerun()
 
-    # ── Word count hint ──
-    if prev_answer:
-        word_c = len(prev_answer.split())
-        color  = "var(--accent)" if word_c >= 30 else "var(--text-muted)"
-        st.markdown(
-            f'<div style="text-align:center;font-family:\'DM Mono\',monospace;font-size:0.62rem;'
-            f'color:{color};margin-top:0.3rem;letter-spacing:0.5px;">'
-            f'// {word_c} words recorded &nbsp;·&nbsp; aim for 50–150 words</div>',
-            unsafe_allow_html=True
-        )
-
-    st.markdown("<div style='height:0.75rem;'></div>", unsafe_allow_html=True)
-
-    # ── Navigation buttons ──
-    is_last = (current == total - 1)
-    nav1, nav_space, nav2 = st.columns([1, 2, 1])
-
+    # ── Navigation ──
+    nav1, _, nav2 = st.columns([1, 2, 1])
     with nav1:
-        if current > 0:
-            if st.button("← Previous", key="iv2_prev", use_container_width=True):
-                _set("current_q", current - 1)
-                _set("is_recording", False)
-                st.rerun()
-
+        if current > 0 and st.button("← Back", use_container_width=True):
+            _set("current_q", current - 1); _set("is_recording", False); st.rerun()
     with nav2:
-        if not is_last:
-            if st.button("Next Question →", key="iv2_next", use_container_width=True):
-                if not _ss("answers", {}).get(current, "").strip():
-                    st.warning("⚠️ Please record an answer before moving to the next question.")
-                else:
-                    _set("current_q", current + 1)
-                    _set("is_recording", False)
-                    st.rerun()
+        if current < total - 1:
+            if st.button("Next →", use_container_width=True):
+                if not _ss("answers", {}).get(current, "").strip(): st.warning("Record an answer first!")
+                else: _set("current_q", current + 1); _set("is_recording", False); st.rerun()
         else:
-            if st.button("✅  Complete Interview", key="iv2_complete", use_container_width=True):
-                if not _ss("answers", {}).get(current, "").strip():
-                    st.warning("⚠️ Please record an answer before completing the interview.")
-                else:
-                    # Pull the final emotion timeline off the processor
-                    # BEFORE we stop rendering the camera widget (next
-                    # rerun will be in "evaluating" phase, which doesn't
-                    # mount the camera — that's what releases it).
-                    if webrtc_ctx and webrtc_ctx.video_processor:
-                        _set("emotion_tl", webrtc_ctx.video_processor.get_timeline())
-                    _set("phase", "evaluating")
-                    st.rerun()
+            if st.button("✅ Finish Interview", use_container_width=True):
+                if webrtc_ctx and webrtc_ctx.video_processor: _set("emotion_tl", webrtc_ctx.video_processor.get_timeline())
+                _set("phase", "evaluating"); st.rerun()
 
     # ── Progress dots ──
     answers = _ss("answers", {})
@@ -779,14 +703,15 @@ def _render_evaluating(job_ctx: dict, profile: dict):
     job_title = job_ctx.get("job_title",    "")
     company   = job_ctx.get("company_name", "")
 
-    # Evaluate any unanswered/unscored questions
     unevaluated = [i for i in range(len(questions)) if i not in scores]
-    if unevaluated:
-        prog = st.progress(0, text="Evaluating answers...")
-        for step, i in enumerate(unevaluated):
-            q_obj  = questions[i]
-            answer = answers.get(i, "")
-            with st.spinner(f"Scoring Q{i+1}..."):
+    
+    # --- MODERN ANIMATED SPINNER (Replaces old st.progress loop) ---
+    with st.status("📊 Finalizing Interview Results...", expanded=True) as status:
+        if unevaluated:
+            for step, i in enumerate(unevaluated):
+                status.update(label=f"🤖 Scoring Q{i+1}...", state="running")
+                q_obj  = questions[i]
+                answer = answers.get(i, "")
                 result = evaluate_answer(
                     question=q_obj.get("question", ""),
                     answer=answer,
@@ -795,18 +720,15 @@ def _render_evaluating(job_ctx: dict, profile: dict):
                     job_title=job_title,
                     company=company,
                 )
-            scores[i] = result
-            _set("scores", scores)
-            prog.progress(
-                int(((step + 1) / len(unevaluated)) * 100),
-                text=f"Evaluated {step + 1} / {len(unevaluated)} answers..."
-            )
+                scores[i] = result
+                _set("scores", scores)
 
-    # Compute emotion summary
-    emotion_tl = _ss("emotion_tl", [])
-    with st.spinner("📊 Building emotion analysis..."):
+        status.update(label="📊 Building emotion analysis...", state="running")
+        emotion_tl = _ss("emotion_tl", [])
         emotion_summary = compute_emotion_summary(emotion_tl)
-    _set("emotion_summary", emotion_summary)
+        _set("emotion_summary", emotion_summary)
+        
+        status.update(label="✅ Interview processing complete!", state="complete", expanded=False)
 
     _set("completed_at", datetime.utcnow().isoformat())
     _set("phase", "done")
@@ -968,7 +890,8 @@ def _render_done(job_ctx: dict, profile: dict):
     report_b64 = _ss("report_b64", "")
 
     if not report_b64:
-        with st.spinner("📄 Generating PDF report..."):
+        # ---ANIMATED SPINNER ---
+        with st.status("📄 Compiling your final report...", expanded=True) as status:
             try:
                 pdf_bytes = generate_interview_report_pdf(
                     candidate_name=profile.get("full_name", st.session_state.get("user_name", "Candidate")),
@@ -984,6 +907,7 @@ def _render_done(job_ctx: dict, profile: dict):
                 # Save to Firebase
                 uid = st.session_state.get("user_uid", "")
                 if uid and app_key:
+                    status.update(label="💾 Saving report to database...", state="running")
                     report_payload = {
                         "candidate_uid":    uid,
                         "candidate_name":   profile.get("full_name", st.session_state.get("user_name", "")),
@@ -1012,14 +936,15 @@ def _render_done(job_ctx: dict, profile: dict):
                         ],
                         "emotion_timeline": emotion_summary.get("timeline", []),
                     }
-                    with st.spinner("💾 Saving report to Firebase..."):
-                        save_interview_report(uid, app_key, recruiter_uid, report_payload)
+                    save_interview_report(uid, app_key, recruiter_uid, report_payload)
 
                 import base64
                 report_b64 = base64.b64encode(pdf_bytes).decode()
                 _set("report_b64", report_b64)
-
+                
+                status.update(label="✅ Report generated and saved!", state="complete", expanded=False)
             except Exception as e:
+                status.update(label="⚠️ Failed to generate report.", state="error")
                 st.warning(f"⚠️ Could not generate PDF: {e}")
 
     if report_b64:
@@ -1062,9 +987,8 @@ def _render_done(job_ctx: dict, profile: dict):
 def render_interview_page():
     """
     Main interview page renderer.
-    Call this from app.py when current_page == "interview".
-    Requires st.session_state.job_interview_context to be set.
-    Requires st.session_state.user_uid, user_name to be set.
+    Camera is initialized once at the top to avoid duplicate key errors.
+    Layout splits into columns during the 'question' phase.
     """
     _inject_interview_css()
 
@@ -1072,10 +996,8 @@ def render_interview_page():
 
     uid     = st.session_state.get("user_uid", "")
     profile = load_candidate_profile(uid) if uid else {}
-
     job_ctx = st.session_state.get("job_interview_context")
 
-    # No job context → show generic fallback context
     if not job_ctx:
         job_ctx = {
             "job_title":      "General Interview",
@@ -1092,22 +1014,25 @@ def render_interview_page():
     # Initialize phase
     if _ss("phase") is None:
         _set("phase", "briefing")
-
     phase = _ss("phase")
 
-    # The camera widget stays mounted (same key) across briefing + question
-    # phases only, so the candidate is asked for permission once and the
-    # connection is reused. It naturally releases (camera light turns off)
-    # once we move past the question phase, since it's no longer rendered.
-    webrtc_ctx = None
-    if phase in ("briefing", "question"):
-        webrtc_ctx = _get_webrtc_ctx()
-
+    # Layout structure
     if phase == "briefing":
+        # Full width for briefing
+        webrtc_ctx = _get_webrtc_ctx()
         _render_briefing(job_ctx, profile, webrtc_ctx)
 
     elif phase == "question":
-        _render_question_screen(job_ctx, profile, webrtc_ctx)
+        # Split layout for questions: Question (2/3) + Camera (1/3)
+        col_left, col_right = st.columns([2, 1])
+        
+        # Camera is rendered inside the right column
+        with col_right:
+            st.markdown("### 📷 Live Camera")
+            webrtc_ctx = _get_webrtc_ctx()
+            
+        with col_left:
+            _render_question_screen(job_ctx, profile, webrtc_ctx)
 
     elif phase == "evaluating":
         _render_evaluating(job_ctx, profile)

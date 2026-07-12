@@ -89,6 +89,19 @@ def transcribe_audio(audio_data: sr.AudioData) -> str:
 # ANSWER EVALUATION  (Gemini under the hood)
 # ───────────────────────────────────────────
 
+@st.cache_resource
+def get_gemini_model():
+    """
+    Configure and load Gemini model ONCE.
+    This prevents the app from pausing/reconfiguring on every API call.
+    """
+    import google.generativeai as genai_sdk
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return None
+    genai_sdk.configure(api_key=api_key)
+    return genai_sdk.GenerativeModel("gemini-1.5-flash")
+
 def evaluate_answer(
     question: str,
     answer: str,
@@ -133,14 +146,12 @@ Note: This was a spoken answer, so minor grammar issues are acceptable.
 Respond ONLY with valid JSON (no markdown, no extra text):
 {{"score": <0-100>, "feedback": "<2 sentences of constructive feedback>", "correct": <true if score>=60>}}"""
 
+    model = get_gemini_model()
+    
     try:
-        api_key = os.environ.get("GEMINI_API_KEY", "")
-        if not api_key:
-            raise ValueError("No API key configured")
+        if not model:
+            raise ValueError("No model available (missing API key?)")
 
-        import google.generativeai as genai_sdk
-        genai_sdk.configure(api_key=api_key)
-        model = genai_sdk.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         raw = response.text.strip()
 

@@ -7,12 +7,13 @@ import streamlit as st
 import time
 from datetime import datetime, timedelta
 from firebase_admin import db as realtime_db
-
+from dashboard.candidate import compute_match_score, _match_badge_html
 
 # ===========================
 # RECRUITER FIREBASE HELPERS
 # ===========================
 
+@st.cache_data(ttl=120)
 def load_recruiter_profile(uid: str) -> dict:
     try:
         snapshot = realtime_db.reference(f"recruiters/{uid}").get()
@@ -28,6 +29,7 @@ def save_recruiter_profile(uid: str, data: dict) -> bool:
         data["uid"]              = uid
         data["email"]            = st.session_state.user_email
         realtime_db.reference(f"recruiters/{uid}").set(data)
+        load_recruiter_profile.clear() # Clear cache on save
         return True
     except Exception as e:
         st.error(f"❌ Failed to save recruiter profile: {str(e)}")
@@ -51,13 +53,14 @@ def post_job_requirement(uid: str, job_data: dict) -> bool:
             fs.collection("job_postings").add(job_data)
         except Exception:
             pass
-
+            
+        load_job_postings.clear() # Clear cache on post
         return True
     except Exception as e:
         st.error(f"❌ Failed to post job: {str(e)}")
         return False
 
-
+@st.cache_data(ttl=300)
 def load_job_postings(uid: str) -> list:
     try:
         snapshot = realtime_db.reference(f"recruiters/{uid}/job_postings").get()
@@ -67,7 +70,7 @@ def load_job_postings(uid: str) -> list:
     except Exception:
         return []
 
-
+@st.cache_data(ttl=120)
 def load_applications(uid: str) -> list:
     try:
         snapshot = realtime_db.reference(f"recruiters/{uid}/applications").get()
@@ -77,7 +80,7 @@ def load_applications(uid: str) -> list:
     except Exception:
         return []
 
-
+@st.cache_data(ttl=300)
 def load_interview_report(candidate_uid: str) -> dict:
     try:
         snapshot = realtime_db.reference(f"interview_reports/{candidate_uid}").get()
@@ -262,61 +265,66 @@ def recruiter_profile_tab():
             unsafe_allow_html=True
         )
 
-    st.markdown('<div class="profile-sec"><span class="ps-num">01</span><span class="ps-title">Company Identity</span><span class="ps-desc">// who you are</span></div>', unsafe_allow_html=True)
-    col_a, col_b = st.columns(2, gap="medium")
-    with col_a:
-        company_name = st.text_input("Company name", value=profile.get("company_name", ""), placeholder="e.g. Acme Corp, FinEdge AI", key="rp_company_name")
-    with col_b:
-        industry_opts = ["Technology", "FinTech", "HealthTech", "EdTech", "E-Commerce", "Consulting", "Manufacturing", "Media & Entertainment", "Telecom", "Other"]
-        ind_def = profile.get("industry", "Technology")
-        industry = st.selectbox("Industry", industry_opts, index=industry_opts.index(ind_def) if ind_def in industry_opts else 0, key="rp_industry")
+    # 🛑 YAHAN SE FORM SHURU (Taake type karne par screen refresh na ho)
+    with st.form("recruiter_profile_form"):
+        st.markdown('<div class="profile-sec"><span class="ps-num">01</span><span class="ps-title">Company Identity</span><span class="ps-desc">// who you are</span></div>', unsafe_allow_html=True)
+        col_a, col_b = st.columns(2, gap="medium")
+        with col_a:
+            company_name = st.text_input("Company name", value=profile.get("company_name", ""), placeholder="e.g. Acme Corp, FinEdge AI", key="rp_company_name")
+        with col_b:
+            industry_opts = ["Technology", "FinTech", "HealthTech", "EdTech", "E-Commerce", "Consulting", "Manufacturing", "Media & Entertainment", "Telecom", "Other"]
+            ind_def = profile.get("industry", "Technology")
+            industry = st.selectbox("Industry", industry_opts, index=industry_opts.index(ind_def) if ind_def in industry_opts else 0, key="rp_industry")
+    
+        st.markdown('<div class="profile-sec"><span class="ps-num">02</span><span class="ps-title">Recruiter Details</span><span class="ps-desc">// your role</span></div>', unsafe_allow_html=True)
+        col_c, col_d = st.columns(2, gap="medium")
+        with col_c:
+            recruiter_role = st.text_input("Your role / title", value=profile.get("recruiter_role", ""), placeholder="e.g. Talent Acquisition Lead, HR Manager", key="rp_recruiter_role")
+        with col_d:
+            company_size_opts = ["1–10", "11–50", "51–200", "201–500", "500+"]
+            cs_def = profile.get("company_size", "51–200")
+            company_size = st.selectbox("Company size", company_size_opts, index=company_size_opts.index(cs_def) if cs_def in company_size_opts else 2, key="rp_company_size")
+    
+        col_e, col_f = st.columns(2, gap="medium")
+        with col_e:
+            company_website = st.text_input("Company website (optional)", value=profile.get("company_website", ""), placeholder="https://yourcompany.com", key="rp_website")
+        with col_f:
+            linkedin_company = st.text_input("Company LinkedIn (optional)", value=profile.get("linkedin_company", ""), placeholder="https://linkedin.com/company/yourco", key="rp_linkedin")
+    
+        st.markdown('<div class="profile-sec"><span class="ps-num">03</span><span class="ps-title">Company Bio</span><span class="ps-desc">// elevator pitch</span></div>', unsafe_allow_html=True)
+        bio = st.text_area("Brief company bio", value=profile.get("bio", ""), placeholder="What does your company do? What kind of talent are you looking for?", height=110, key="rp_bio")
+        st.caption(f"{'✓' if len(bio.strip()) >= 20 else '~'}  {len(bio)} chars  //  aim for 80+")
+    
+        st.markdown('<div class="form-divider"></div>', unsafe_allow_html=True)
+        save_col, _ = st.columns([1, 3])
+        with save_col:
+            label = "Save Changes →" if is_edit else "Save Profile →"
+            save_clicked = st.form_submit_button(label, use_container_width=True)
 
-    st.markdown('<div class="profile-sec"><span class="ps-num">02</span><span class="ps-title">Recruiter Details</span><span class="ps-desc">// your role</span></div>', unsafe_allow_html=True)
-    col_c, col_d = st.columns(2, gap="medium")
-    with col_c:
-        recruiter_role = st.text_input("Your role / title", value=profile.get("recruiter_role", ""), placeholder="e.g. Talent Acquisition Lead, HR Manager", key="rp_recruiter_role")
-    with col_d:
-        company_size_opts = ["1–10", "11–50", "51–200", "201–500", "500+"]
-        cs_def = profile.get("company_size", "51–200")
-        company_size = st.selectbox("Company size", company_size_opts, index=company_size_opts.index(cs_def) if cs_def in company_size_opts else 2, key="rp_company_size")
-
-    col_e, col_f = st.columns(2, gap="medium")
-    with col_e:
-        company_website = st.text_input("Company website (optional)", value=profile.get("company_website", ""), placeholder="https://yourcompany.com", key="rp_website")
-    with col_f:
-        linkedin_company = st.text_input("Company LinkedIn (optional)", value=profile.get("linkedin_company", ""), placeholder="https://linkedin.com/company/yourco", key="rp_linkedin")
-
-    st.markdown('<div class="profile-sec"><span class="ps-num">03</span><span class="ps-title">Company Bio</span><span class="ps-desc">// elevator pitch</span></div>', unsafe_allow_html=True)
-    bio = st.text_area("Brief company bio", value=profile.get("bio", ""), placeholder="What does your company do? What kind of talent are you looking for?", height=110, key="rp_bio")
-    st.caption(f"{'✓' if len(bio.strip()) >= 20 else '~'}  {len(bio)} chars  //  aim for 80+")
-
-    st.markdown('<div class="form-divider"></div>', unsafe_allow_html=True)
-    save_col, _ = st.columns([1, 3])
-    with save_col:
-        label = "Save Changes →" if is_edit else "Save Profile →"
-        if st.button(label, use_container_width=True, key="save_rec_profile_btn"):
-            errors = []
-            if not company_name.strip():   errors.append("Company name is required.")
-            if not recruiter_role.strip(): errors.append("Your role/title is required.")
-            for err in errors:
-                st.error(f"❌ {err}")
-            if not errors:
-                payload = {
-                    "company_name":     company_name.strip(),
-                    "industry":         industry,
-                    "recruiter_role":   recruiter_role.strip(),
-                    "company_size":     company_size,
-                    "company_website":  company_website.strip(),
-                    "linkedin_company": linkedin_company.strip(),
-                    "bio":              bio.strip(),
-                }
-                with st.spinner("Saving..."):
-                    saved = save_recruiter_profile(uid, payload)
-                if saved:
-                    st.session_state.recruiter_profile_setup = True
-                    st.success(f"✅ Profile {'updated' if is_edit else 'saved'}!")
-                    time.sleep(0.6)
-                    st.rerun()
+    # 🛑 YAHAN FORM SUBMIT HONE KE BAAD DATABASE MEIN SAVE HOGA
+    if save_clicked:
+        errors = []
+        if not company_name.strip():   errors.append("Company name is required.")
+        if not recruiter_role.strip(): errors.append("Your role/title is required.")
+        for err in errors:
+            st.error(f"❌ {err}")
+        if not errors:
+            payload = {
+                "company_name":     company_name.strip(),
+                "industry":         industry,
+                "recruiter_role":   recruiter_role.strip(),
+                "company_size":     company_size,
+                "company_website":  company_website.strip(),
+                "linkedin_company": linkedin_company.strip(),
+                "bio":              bio.strip(),
+            }
+            with st.spinner("Saving..."):
+                saved = save_recruiter_profile(uid, payload)
+            if saved:
+                st.session_state.recruiter_profile_setup = True
+                st.success(f"✅ Profile {'updated' if is_edit else 'saved'}!")
+                time.sleep(0.6)
+                st.rerun()
 
 
 # ===========================
@@ -335,91 +343,96 @@ def post_requirements_tab():
         unsafe_allow_html=True
     )
 
-    st.markdown('<div class="profile-sec"><span class="ps-num">01</span><span class="ps-title">Role Information</span><span class="ps-desc">// the position</span></div>', unsafe_allow_html=True)
-    col_a, col_b = st.columns(2, gap="medium")
-    with col_a:
-        job_title = st.text_input("Job title", placeholder="e.g. Senior ML Engineer, Data Analyst", key="pr_job_title")
-    with col_b:
-        exp_lvl_opts = ["Fresher", "Mid-Level", "Senior", "Lead / Principal", "Any"]
-        exp_lvl = st.selectbox("Experience level required", exp_lvl_opts, index=1, key="pr_exp_level")
+    # 🛑 YAHAN SE FORM SHURU
+    with st.form("post_job_form"):
+        st.markdown('<div class="profile-sec"><span class="ps-num">01</span><span class="ps-title">Role Information</span><span class="ps-desc">// the position</span></div>', unsafe_allow_html=True)
+        col_a, col_b = st.columns(2, gap="medium")
+        with col_a:
+            job_title = st.text_input("Job title", placeholder="e.g. Senior ML Engineer, Data Analyst", key="pr_job_title")
+        with col_b:
+            exp_lvl_opts = ["Fresher", "Mid-Level", "Senior", "Lead / Principal", "Any"]
+            exp_lvl = st.selectbox("Experience level required", exp_lvl_opts, index=1, key="pr_exp_level")
 
-    col_c, col_d = st.columns(2, gap="medium")
-    with col_c:
-        work_mode = st.selectbox("Work mode", ["On-site", "Remote", "Hybrid"], index=2, key="pr_work_mode")
-    with col_d:
-        location = st.text_input("Location (optional)", placeholder="e.g. Karachi, Remote-Global", key="pr_location")
+        col_c, col_d = st.columns(2, gap="medium")
+        with col_c:
+            work_mode = st.selectbox("Work mode", ["On-site", "Remote", "Hybrid"], index=2, key="pr_work_mode")
+        with col_d:
+            location = st.text_input("Location (optional)", placeholder="e.g. Karachi, Remote-Global", key="pr_location")
 
-    ALL_SKILLS = [
-        "Python", "JavaScript", "TypeScript", "Java", "C++", "C#", "Go", "Rust",
-        "SQL", "NoSQL", "PostgreSQL", "MongoDB", "Redis",
-        "React", "Vue", "Angular", "Next.js", "Node.js", "Django", "FastAPI", "Flask",
-        "TensorFlow", "PyTorch", "Scikit-learn", "Keras", "HuggingFace",
-        "MLOps", "LangChain", "OpenCV", "NLP", "Computer Vision",
-        "AWS", "GCP", "Azure", "Docker", "Kubernetes", "Terraform",
-        "Spark", "Kafka", "Airflow", "dbt",
-        "Git", "Linux", "REST APIs", "GraphQL", "Microservices",
-        "Figma", "Tableau", "Power BI", "Excel",
-        "Leadership", "Communication", "Project Management", "Agile / Scrum",
-    ]
+        ALL_SKILLS = [
+            "Python", "JavaScript", "TypeScript", "Java", "C++", "C#", "Go", "Rust",
+            "SQL", "NoSQL", "PostgreSQL", "MongoDB", "Redis",
+            "React", "Vue", "Angular", "Next.js", "Node.js", "Django", "FastAPI", "Flask",
+            "TensorFlow", "PyTorch", "Scikit-learn", "Keras", "HuggingFace",
+            "MLOps", "LangChain", "OpenCV", "NLP", "Computer Vision",
+            "AWS", "GCP", "Azure", "Docker", "Kubernetes", "Terraform",
+            "Spark", "Kafka", "Airflow", "dbt",
+            "Git", "Linux", "REST APIs", "GraphQL", "Microservices",
+            "Figma", "Tableau", "Power BI", "Excel",
+            "Leadership", "Communication", "Project Management", "Agile / Scrum",
+        ]
 
-    st.markdown('<div class="profile-sec"><span class="ps-num">02</span><span class="ps-title">Technical Requirements</span><span class="ps-desc">// core skills</span></div>', unsafe_allow_html=True)
-    core_skills = st.multiselect("Core technical skills required", options=ALL_SKILLS, default=["Python", "SQL"], key="pr_core_skills")
-    if core_skills:
-        pills = "".join(f'<span class="skill-tag">{s}</span>' for s in core_skills)
-        st.markdown(f'<div style="margin-top:6px;">{pills}</div>', unsafe_allow_html=True)
-    nice_to_have = st.multiselect("Nice-to-have skills (optional)", options=[s for s in ALL_SKILLS if s not in core_skills], key="pr_nice_to_have")
+        st.markdown('<div class="profile-sec"><span class="ps-num">02</span><span class="ps-title">Technical Requirements</span><span class="ps-desc">// core skills</span></div>', unsafe_allow_html=True)
+        core_skills = st.multiselect("Core technical skills required", options=ALL_SKILLS, default=["Python", "SQL"], key="pr_core_skills")
+        if core_skills:
+            pills = "".join(f'<span class="skill-tag">{s}</span>' for s in core_skills)
+            st.markdown(f'<div style="margin-top:6px;">{pills}</div>', unsafe_allow_html=True)
+        nice_to_have = st.multiselect("Nice-to-have skills (optional)", options=[s for s in ALL_SKILLS if s not in core_skills], key="pr_nice_to_have")
 
-    st.markdown('<div class="profile-sec"><span class="ps-num">03</span><span class="ps-title">AI Interview Thresholds</span><span class="ps-desc">// evaluation criteria</span></div>', unsafe_allow_html=True)
-    col_e, col_f = st.columns(2, gap="medium")
-    with col_e:
-        min_speech_clarity = st.slider("Minimum speech clarity threshold (%)", 0, 100, 70, 5, key="pr_speech_clarity")
-        st.caption(f"// candidates below {min_speech_clarity}% clarity will be flagged")
-    with col_f:
-        min_score = st.slider("Minimum overall AI score (%)", 0, 100, 60, 5, key="pr_min_score")
-        st.caption(f"// auto-reject below {min_score}% overall score")
+        st.markdown('<div class="profile-sec"><span class="ps-num">03</span><span class="ps-title">AI Interview Thresholds</span><span class="ps-desc">// evaluation criteria</span></div>', unsafe_allow_html=True)
+        col_e, col_f = st.columns(2, gap="medium")
+        with col_e:
+            min_speech_clarity = st.slider("Minimum speech clarity threshold (%)", 0, 100, 70, 5, key="pr_speech_clarity")
+            st.caption(f"// candidates below {min_speech_clarity}% clarity will be flagged")
+        with col_f:
+            min_score = st.slider("Minimum overall AI score (%)", 0, 100, 60, 5, key="pr_min_score")
+            st.caption(f"// auto-reject below {min_score}% overall score")
 
-    col_g, col_h = st.columns(2, gap="medium")
-    with col_g:
-        trait_opts = ["Analytical", "Collaborative", "Confident", "Creative", "Empathetic", "Leadership", "Results-Oriented", "Any"]
-        target_trait = st.selectbox("Target dominant behavioral trait", trait_opts, index=0, key="pr_target_trait")
-    with col_h:
-        interview_type = st.selectbox("Interview type for this role", ["Technical", "HR", "Behavioral", "Mixed"], index=3, key="pr_interview_type")
+        col_g, col_h = st.columns(2, gap="medium")
+        with col_g:
+            trait_opts = ["Analytical", "Collaborative", "Confident", "Creative", "Empathetic", "Leadership", "Results-Oriented", "Any"]
+            target_trait = st.selectbox("Target dominant behavioral trait", trait_opts, index=0, key="pr_target_trait")
+        with col_h:
+            interview_type = st.selectbox("Interview type for this role", ["Technical", "HR", "Behavioral", "Mixed"], index=3, key="pr_interview_type")
 
-    st.markdown('<div class="profile-sec"><span class="ps-num">04</span><span class="ps-title">Job Description</span><span class="ps-desc">// context for gemini</span></div>', unsafe_allow_html=True)
-    job_description = st.text_area("Full job description (optional but recommended)", placeholder="Paste or write the full JD here. Gemini uses this to generate highly relevant, role-specific interview questions.", height=140, key="pr_job_description")
-    st.caption(f"{'✓' if len(job_description.strip()) > 50 else '~'}  {len(job_description)} chars  //  more context = sharper questions")
+        st.markdown('<div class="profile-sec"><span class="ps-num">04</span><span class="ps-title">Job Description</span><span class="ps-desc">// context for gemini</span></div>', unsafe_allow_html=True)
+        job_description = st.text_area("Full job description (optional but recommended)", placeholder="Paste or write the full JD here. Gemini uses this to generate highly relevant, role-specific interview questions.", height=140, key="pr_job_description")
+        st.caption(f"{'✓' if len(job_description.strip()) > 50 else '~'}  {len(job_description)} chars  //  more context = sharper questions")
 
-    st.markdown('<div class="form-divider"></div>', unsafe_allow_html=True)
-    post_col, _ = st.columns([1, 3])
-    with post_col:
-        if st.button("📤  Post Job Requirement →", use_container_width=True, key="post_job_btn"):
-            errors = []
-            if not job_title.strip(): errors.append("Job title is required.")
-            if not core_skills:       errors.append("Select at least one core skill.")
-            for err in errors:
-                st.error(f"❌ {err}")
-            if not errors:
-                rec_profile = load_recruiter_profile(uid)
-                payload = {
-                    "job_title":          job_title.strip(),
-                    "company_name":       rec_profile.get("company_name", ""),
-                    "industry":           rec_profile.get("industry", ""),
-                    "experience_level":   exp_lvl,
-                    "work_mode":          work_mode,
-                    "location":           location.strip(),
-                    "core_skills":        core_skills,
-                    "nice_to_have":       nice_to_have,
-                    "min_speech_clarity": min_speech_clarity,
-                    "min_score":          min_score,
-                    "target_trait":       target_trait,
-                    "interview_type":     interview_type,
-                    "job_description":    job_description.strip(),
-                }
-                with st.spinner("Posting to Firebase..."):
-                    ok = post_job_requirement(uid, payload)
-                if ok:
-                    st.success("✅ Job posted! Candidates can now see and apply for this role.")
-                    st.balloons()
+        st.markdown('<div class="form-divider"></div>', unsafe_allow_html=True)
+        post_col, _ = st.columns([1, 3])
+        with post_col:
+            submit_job = st.form_submit_button("📤  Post Job Requirement →", use_container_width=True)
+
+    # 🛑 YAHAN FORM SUBMIT HONE KE BAAD DATABASE MEIN SAVE HOGA
+    if submit_job:
+        errors = []
+        if not job_title.strip(): errors.append("Job title is required.")
+        if not core_skills:       errors.append("Select at least one core skill.")
+        for err in errors:
+            st.error(f"❌ {err}")
+        if not errors:
+            rec_profile = load_recruiter_profile(uid)
+            payload = {
+                "job_title":          job_title.strip(),
+                "company_name":       rec_profile.get("company_name", ""),
+                "industry":           rec_profile.get("industry", ""),
+                "experience_level":   exp_lvl,
+                "work_mode":          work_mode,
+                "location":           location.strip(),
+                "core_skills":        core_skills,
+                "nice_to_have":       nice_to_have,
+                "min_speech_clarity": min_speech_clarity,
+                "min_score":          min_score,
+                "target_trait":       target_trait,
+                "interview_type":     interview_type,
+                "job_description":    job_description.strip(),
+            }
+            with st.spinner("Posting to Firebase..."):
+                ok = post_job_requirement(uid, payload)
+            if ok:
+                st.success("✅ Job posted! Candidates can now see and apply for this role.")
+                st.balloons()
 
     st.markdown('<div class="section-heading">Your active postings</div>', unsafe_allow_html=True)
     with st.spinner("Fetching postings..."):
@@ -478,17 +491,20 @@ def incoming_applications_tab():
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    f1, f2, f3 = st.columns([2, 1, 1], gap="small")
-    with f1:
-        search_term = st.text_input("Search candidate name or role", placeholder="e.g. Sarah, ML Engineer", key="rec_app_search").strip().lower()
-    with f2:
-        status_filter = st.selectbox("Filter by status",
-            ["All", "Applied", "Pending Review", "Interview Scheduled", "Interview Completed",
-             "Report Generated", "Shortlisted", "Hired", "Rejected", "Cancelled"],
-            key="rec_app_status_filter"
-        )
-    with f3:
-        sort_order = st.selectbox("Sort by", ["Newest first", "Oldest first", "Name A–Z"], key="rec_app_sort")
+    with st.form("app_filters_form"):
+        f1, f2, f3 = st.columns([2, 1, 1], gap="small")
+        with f1:
+            search_term = st.text_input("Search candidate name or role", placeholder="e.g. Sarah, ML Engineer", key="rec_app_search").strip().lower()
+        with f2:
+            status_filter = st.selectbox("Filter by status",
+                ["All", "Applied", "Pending Review", "Interview Scheduled", "Interview Completed",
+                 "Report Generated", "Shortlisted", "Hired", "Rejected", "Cancelled"],
+                key="rec_app_status_filter"
+            )
+        with f3:
+            sort_order = st.selectbox("Sort by", ["Newest first", "Oldest first", "Name A–Z"], key="rec_app_sort")
+            
+        submit_filters = st.form_submit_button("🔍 Apply Filters")
 
     filtered = [
         a for a in apps
@@ -514,10 +530,25 @@ def incoming_applications_tab():
 
     st.markdown('<div class="section-heading">Application queue</div>', unsafe_allow_html=True)
 
+    from dashboard.candidate import compute_match_score
+
     for idx, app in enumerate(filtered):
+        # Match Score Calculation
+        cand_uid = app.get("candidate_uid", "")
+        job_id = app.get("job_id", "")
+        cand_profile = realtime_db.reference(f"users/{cand_uid}/candidate_profile").get() or {}
+        cand_skills = cand_profile.get("primary_skills", "")
+        job_data = realtime_db.reference(f"recruiters/{uid}/job_postings/{job_id}").get() or {}
+        job_skills = job_data.get("core_skills", [])
+        
+        match = compute_match_score(cand_skills, job_skills)
+        pct = match["pct"]
+        css = "match-high" if pct >= 70 else ("match-mid" if pct >= 40 else "match-low")
+        badge_html = f'<span class="match-badge {css}" style="margin-left:10px; font-size:0.7rem;">● {pct}% Match</span>'
+
+        # Existing Variables
         status      = app.get("status", "Applied")
         app_key     = app.get("key", "")
-        cand_uid    = app.get("candidate_uid", "")
         cand_name   = app.get("candidate_name", "—")
         job_title   = app.get("job_title", "—")
         applied_str = app.get("applied_at", "")[:10] if app.get("applied_at") else "—"
@@ -548,7 +579,7 @@ def incoming_applications_tab():
         <div class="cand-card">
           <div class="cc-header">
             <div class="cc-avatar">{initials}</div>
-            <div style="flex:1;"><div class="cc-name">{cand_name}</div><div class="cc-role">// {job_title}</div></div>
+            <div style="flex:1;"><div class="cc-name">{cand_name} {badge_html}</div><div class="cc-role">// {job_title}</div></div>
             <div style="display:flex;flex-direction:column;align-items:flex-end;gap:0.35rem;">
               {_rec_status_badge(status)}{deadline_html}
             </div>

@@ -14,6 +14,7 @@ from firebase_admin import db as realtime_db
 # CANDIDATE PROFILE HELPERS
 # ===========================
 
+@st.cache_data(ttl=120)
 def load_candidate_profile(uid: str) -> dict:
     try:
         snapshot = realtime_db.reference(f"users/{uid}/candidate_profile").get()
@@ -27,6 +28,7 @@ def save_candidate_profile(uid: str, profile_data: dict) -> bool:
         profile_data["profile_complete"] = True
         profile_data["updated_at"] = datetime.utcnow().isoformat()
         realtime_db.reference(f"users/{uid}/candidate_profile").set(profile_data)
+        load_candidate_profile.clear() # Form save hone par cache clear karna zaroori hai
         return True
     except Exception as e:
         st.error(f"❌ Failed to save profile: {str(e)}")
@@ -37,6 +39,7 @@ def save_candidate_profile(uid: str, profile_data: dict) -> bool:
 # CANDIDATE JOB / APPLICATION HELPERS
 # ===========================
 
+@st.cache_data(ttl=300)
 def load_all_job_postings() -> list:
     """Fetch all active job postings across all recruiters. Falls back to rich mock data."""
     try:
@@ -210,13 +213,17 @@ def load_candidate_applications(uid: str) -> list:
     try:
         snapshot = realtime_db.reference(f"candidates/{uid}/applications").get()
         if snapshot:
-            return sorted(
-                [{"key": k, **v} for k, v in snapshot.items()],
-                key=lambda x: x.get("applied_at", ""),
-                reverse=True
-            )
-        raise ValueError("no data")
-    except Exception:
+            apps = []
+            for k, v in snapshot.items():
+                v["key"] = k
+                # Debugging ke liye check karein
+                if "company_name" not in v:
+                    print(f"DEBUG: Company name missing in application {k}")
+                apps.append(v)
+            return sorted(apps, key=lambda x: x.get("applied_at", ""), reverse=True)
+        return []
+    except Exception as e:
+        st.error(f"Error loading apps: {e}")
         return []
 
 
@@ -256,11 +263,21 @@ def check_status_notifications(applications: list, last_seen: str) -> list:
     notable_statuses = {"Shortlisted", "Hired", "Rejected", "Interview Scheduled", "Cancelled"}
     if not last_seen:
         return []
-    return [
-        app for app in (applications or [])
-        if app.get("status", "") in notable_statuses
-        and app.get("last_status_change", "") > last_seen
-    ]
+    
+    # Hum yahan check kar rahe hain ke app mein zaroori info hai ya nahi
+    results = []
+    for app in (applications or []):
+        if app.get("status", "") in notable_statuses and app.get("last_status_change", "") > last_seen:
+            # Agar company ya title missing hai, to object ko update karein
+            if "company_name" not in app or not app.get("job_title"):
+                # Database se dubara fetch karke patch karein
+                uid = st.session_state.user_uid
+                app_key = app.get("key")
+                full_app = realtime_db.reference(f"candidates/{uid}/applications/{app_key}").get()
+                if full_app:
+                    app.update(full_app)
+            results.append(app)
+    return results
 
 
 def submit_application(uid: str, job_data: dict) -> bool:
@@ -495,90 +512,94 @@ def candidate_profile_tab():
             unsafe_allow_html=True
         )
 
-    st.markdown('<div class="profile-sec"><span class="ps-num">01</span><span class="ps-title">Personal Info</span><span class="ps-desc">// identity</span></div>', unsafe_allow_html=True)
-    col_a, col_b = st.columns(2, gap="medium")
-    with col_a:
-        full_name = st.text_input("Full name", value=profile.get("full_name", st.session_state.user_name), placeholder="Your full name", key="pf_full_name")
-    with col_b:
-        existing_photo_b64 = profile.get("profile_photo_b64", "")
-        uploaded_photo = st.file_uploader("Profile photo (optional)", type=["jpg", "jpeg", "png", "webp"], key="pf_photo_upload")
-        if uploaded_photo is not None:
-            photo_bytes = uploaded_photo.read()
-            photo_b64_new = base64.b64encode(photo_bytes).decode()
-            photo_mime = uploaded_photo.type
-            profile_photo_b64_final = photo_b64_new
-            photo_data_uri = f"data:{photo_mime};base64,{photo_b64_new}"
-            st.markdown(
-                f'<div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.75rem;">'
-                f'<img src="{photo_data_uri}" style="width:52px;height:52px;border-radius:8px;object-fit:cover;border:1px solid var(--border);">'
-                f'<span style="font-family:\'DM Mono\',monospace;font-size:0.7rem;color:var(--text-muted);">// new photo selected</span>'
-                f'</div>', unsafe_allow_html=True
-            )
-        elif existing_photo_b64:
-            profile_photo_b64_final = existing_photo_b64
-            existing_uri = existing_photo_b64 if existing_photo_b64.startswith("data:") else f"data:image/jpeg;base64,{existing_photo_b64}"
-            st.markdown(
-                f'<div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.75rem;">'
-                f'<img src="{existing_uri}" style="width:52px;height:52px;border-radius:8px;object-fit:cover;border:1px solid var(--border);">'
-                f'<span style="font-family:\'DM Mono\',monospace;font-size:0.7rem;color:var(--text-muted);">// current photo</span>'
-                f'</div>', unsafe_allow_html=True
-            )
-        else:
-            profile_photo_b64_final = ""
+    # 🛑 YAHAN SE FORM SHURU HOTA HAI TAAKE TYPING PAR SCREEN STUCK NA HO
+    with st.form("candidate_profile_form"):
+        st.markdown('<div class="profile-sec"><span class="ps-num">01</span><span class="ps-title">Personal Info</span><span class="ps-desc">// identity</span></div>', unsafe_allow_html=True)
+        col_a, col_b = st.columns(2, gap="medium")
+        with col_a:
+            full_name = st.text_input("Full name", value=profile.get("full_name", st.session_state.user_name), placeholder="Your full name", key="pf_full_name")
+        with col_b:
+            existing_photo_b64 = profile.get("profile_photo_b64", "")
+            uploaded_photo = st.file_uploader("Profile photo (optional)", type=["jpg", "jpeg", "png", "webp"], key="pf_photo_upload")
+            if uploaded_photo is not None:
+                photo_bytes = uploaded_photo.read()
+                photo_b64_new = base64.b64encode(photo_bytes).decode()
+                photo_mime = uploaded_photo.type
+                profile_photo_b64_final = photo_b64_new
+                photo_data_uri = f"data:{photo_mime};base64,{photo_b64_new}"
+                st.markdown(
+                    f'<div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.75rem;">'
+                    f'<img src="{photo_data_uri}" style="width:52px;height:52px;border-radius:8px;object-fit:cover;border:1px solid var(--border);">'
+                    f'<span style="font-family:\'DM Mono\',monospace;font-size:0.7rem;color:var(--text-muted);">// new photo selected</span>'
+                    f'</div>', unsafe_allow_html=True
+                )
+            elif existing_photo_b64:
+                profile_photo_b64_final = existing_photo_b64
+                existing_uri = existing_photo_b64 if existing_photo_b64.startswith("data:") else f"data:image/jpeg;base64,{existing_photo_b64}"
+                st.markdown(
+                    f'<div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.75rem;">'
+                    f'<img src="{existing_uri}" style="width:52px;height:52px;border-radius:8px;object-fit:cover;border:1px solid var(--border);">'
+                    f'<span style="font-family:\'DM Mono\',monospace;font-size:0.7rem;color:var(--text-muted);">// current photo</span>'
+                    f'</div>', unsafe_allow_html=True
+                )
+            else:
+                profile_photo_b64_final = ""
 
-    st.markdown('<div class="profile-sec"><span class="ps-num">02</span><span class="ps-title">Professional Background</span><span class="ps-desc">// experience</span></div>', unsafe_allow_html=True)
-    col_c, col_d = st.columns(2, gap="medium")
-    with col_c:
-        job_role = st.text_input("Target role", value=profile.get("job_role", ""), placeholder="e.g. Software Engineer, Data Analyst", key="pf_job_role")
-        exp_opts = ["Fresher", "Mid-Level", "Senior"]
-        exp_def  = profile.get("experience_level", "Fresher")
-        experience_level = st.selectbox("Experience level", exp_opts, index=exp_opts.index(exp_def) if exp_def in exp_opts else 0, key="pf_exp_level")
-    with col_d:
-        years_exp = st.number_input("Years of experience", min_value=0, max_value=50, value=int(profile.get("years_experience", 0)), step=1, key="pf_years_exp")
-        current_company = st.text_input("Current / last company", value=profile.get("current_company", ""), placeholder="e.g. Google, Acme Corp", key="pf_company")
+        st.markdown('<div class="profile-sec"><span class="ps-num">02</span><span class="ps-title">Professional Background</span><span class="ps-desc">// experience</span></div>', unsafe_allow_html=True)
+        col_c, col_d = st.columns(2, gap="medium")
+        with col_c:
+            job_role = st.text_input("Target role", value=profile.get("job_role", ""), placeholder="e.g. Software Engineer, Data Analyst", key="pf_job_role")
+            exp_opts = ["Fresher", "Mid-Level", "Senior"]
+            exp_def  = profile.get("experience_level", "Fresher")
+            experience_level = st.selectbox("Experience level", exp_opts, index=exp_opts.index(exp_def) if exp_def in exp_opts else 0, key="pf_exp_level")
+        with col_d:
+            years_exp = st.number_input("Years of experience", min_value=0, max_value=50, value=int(profile.get("years_experience", 0)), step=1, key="pf_years_exp")
+            current_company = st.text_input("Current / last company", value=profile.get("current_company", ""), placeholder="e.g. Google, Acme Corp", key="pf_company")
 
-    st.markdown('<div class="profile-sec"><span class="ps-num">03</span><span class="ps-title">Skills</span><span class="ps-desc">// tech & soft</span></div>', unsafe_allow_html=True)
-    col_e, col_f = st.columns(2, gap="medium")
-    with col_e:
-        primary_skills = st.text_input("Primary skills", value=profile.get("primary_skills", ""), placeholder="Python, React, SQL, Machine Learning", key="pf_primary_skills")
-        st.caption("separate with commas")
-    with col_f:
-        secondary_skills = st.text_input("Secondary skills (optional)", value=profile.get("secondary_skills", ""), placeholder="Docker, Figma, Excel", key="pf_secondary_skills")
-        st.caption("supporting / bonus skills")
+        st.markdown('<div class="profile-sec"><span class="ps-num">03</span><span class="ps-title">Skills</span><span class="ps-desc">// tech & soft</span></div>', unsafe_allow_html=True)
+        col_e, col_f = st.columns(2, gap="medium")
+        with col_e:
+            primary_skills = st.text_input("Primary skills", value=profile.get("primary_skills", ""), placeholder="Python, React, SQL, Machine Learning", key="pf_primary_skills")
+            st.caption("separate with commas")
+        with col_f:
+            secondary_skills = st.text_input("Secondary skills (optional)", value=profile.get("secondary_skills", ""), placeholder="Docker, Figma, Excel", key="pf_secondary_skills")
+            st.caption("supporting / bonus skills")
 
-    if primary_skills.strip():
-        pills = "".join(f'<span class="skill-tag">{s.strip()}</span>' for s in primary_skills.split(",") if s.strip())
-        st.markdown(f'<div style="margin-top:6px;">{pills}</div>', unsafe_allow_html=True)
+        if primary_skills.strip():
+            pills = "".join(f'<span class="skill-tag">{s.strip()}</span>' for s in primary_skills.split(",") if s.strip())
+            st.markdown(f'<div style="margin-top:6px;">{pills}</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="profile-sec"><span class="ps-num">04</span><span class="ps-title">Interview Preferences</span><span class="ps-desc">// customise</span></div>', unsafe_allow_html=True)
-    col_g, col_h, col_i = st.columns(3, gap="medium")
-    with col_g:
-        it_opts = ["Technical", "HR", "Behavioral", "Mixed"]
-        it_def  = profile.get("interview_type", "Mixed")
-        interview_type = st.selectbox("Interview type", it_opts, index=it_opts.index(it_def) if it_def in it_opts else 3, key="pf_interview_type")
-    with col_h:
-        nq_opts = [5, 10, 15]
-        nq_def  = int(profile.get("num_questions", 10))
-        num_questions = st.selectbox("No. of questions", nq_opts, index=nq_opts.index(nq_def) if nq_def in nq_opts else 1, key="pf_num_questions")
-    with col_i:
-        diff_opts = ["Easy", "Medium", "Hard"]
-        diff_def  = profile.get("difficulty_level", "Medium")
-        difficulty_level = st.selectbox("Difficulty", diff_opts, index=diff_opts.index(diff_def) if diff_def in diff_opts else 1, key="pf_difficulty")
+        st.markdown('<div class="profile-sec"><span class="ps-num">04</span><span class="ps-title">Interview Preferences</span><span class="ps-desc">// customise</span></div>', unsafe_allow_html=True)
+        col_g, col_h, col_i = st.columns(3, gap="medium")
+        with col_g:
+            it_opts = ["Technical", "HR", "Behavioral", "Mixed"]
+            it_def  = profile.get("interview_type", "Mixed")
+            interview_type = st.selectbox("Interview type", it_opts, index=it_opts.index(it_def) if it_def in it_opts else 3, key="pf_interview_type")
+        with col_h:
+            nq_opts = [5, 10, 15]
+            nq_def  = int(profile.get("num_questions", 10))
+            num_questions = st.selectbox("No. of questions", nq_opts, index=nq_opts.index(nq_def) if nq_def in nq_opts else 1, key="pf_num_questions")
+        with col_i:
+            diff_opts = ["Easy", "Medium", "Hard"]
+            diff_def  = profile.get("difficulty_level", "Medium")
+            difficulty_level = st.selectbox("Difficulty", diff_opts, index=diff_opts.index(diff_def) if diff_def in diff_opts else 1, key="pf_difficulty")
 
-    st.markdown('<div class="profile-sec"><span class="ps-num">05</span><span class="ps-title">About You</span><span class="ps-desc">// bio & links</span></div>', unsafe_allow_html=True)
-    col_j, col_k = st.columns([3, 2], gap="medium")
-    with col_j:
-        bio = st.text_area("Brief bio", value=profile.get("bio", ""), placeholder="2–3 lines about yourself, your goals, what makes you unique...", height=110, key="pf_bio")
-        st.caption(f"{'✓' if len(bio.strip()) >= 20 else '~'}  {len(bio)} chars  //  aim for 50+")
-    with col_k:
-        linkedin_url = st.text_input("LinkedIn URL (optional)", value=profile.get("linkedin_url", ""), placeholder="https://linkedin.com/in/you", key="pf_linkedin")
+        st.markdown('<div class="profile-sec"><span class="ps-num">05</span><span class="ps-title">About You</span><span class="ps-desc">// bio & links</span></div>', unsafe_allow_html=True)
+        col_j, col_k = st.columns([3, 2], gap="medium")
+        with col_j:
+            bio = st.text_area("Brief bio", value=profile.get("bio", ""), placeholder="2–3 lines about yourself, your goals, what makes you unique...", height=110, key="pf_bio")
+            st.caption(f"{'✓' if len(bio.strip()) >= 20 else '~'}  {len(bio)} chars  //  aim for 50+")
+        with col_k:
+            linkedin_url = st.text_input("LinkedIn URL (optional)", value=profile.get("linkedin_url", ""), placeholder="https://linkedin.com/in/you", key="pf_linkedin")
 
-    st.markdown('<div class="form-divider"></div>', unsafe_allow_html=True)
-    save_col, _ = st.columns([1, 3])
-    with save_col:
-        label = "Save Changes →" if is_edit else "Save Profile →"
-        save_clicked = st.button(label, use_container_width=True, key="save_profile_btn")
+        st.markdown('<div class="form-divider"></div>', unsafe_allow_html=True)
+        save_col, _ = st.columns([1, 3])
+        with save_col:
+            label = "Save Changes →" if is_edit else "Save Profile →"
+            # Button ko form_submit_button se change kardiya hai
+            save_clicked = st.form_submit_button(label, use_container_width=True)
 
+    # 🛑 Yahan form submit hone ke baad action hoga
     if save_clicked:
         errors = []
         if not full_name.strip():      errors.append("Full name is required.")
@@ -780,13 +801,30 @@ def application_history_tab():
     if notifications:
         st.markdown('<div class="section-heading">🔔 What\'s new</div>', unsafe_allow_html=True)
         for notif in notifications:
+            # DEBUG: Yeh line screen par print karegi ke notif mein kya aa raha hai
+            # st.write(notif) 
+            
+            # AGAR company_name notif mein nahi hai, to hum usay manually fetch karenge
+            company = notif.get("company_name")
+            if not company or company == "—":
+                # Hum us application key ka use karke direct DB se fetch karenge
+                app_key = notif.get("key")
+                if app_key:
+                    db_data = realtime_db.reference(f"candidates/{uid}/applications/{app_key}").get()
+                    if db_data:
+                        company = db_data.get("company_name")
+            
+            job_title = notif.get("job_title") or "Interview"
+            display_comp = f" at {company}" if company and company != "—" else ""
+            
             status    = notif.get("status", "")
             notif_cls = {"Shortlisted": "notif-shortlisted", "Hired": "notif-hired", "Rejected": "notif-rejected",
                          "Interview Scheduled": "notif-hired", "Cancelled": "notif-rejected"}.get(status, "notif-shortlisted")
             icon = {"Shortlisted": "⭐", "Hired": "🎉", "Rejected": "📭", "Interview Scheduled": "📅", "Cancelled": "⏰"}.get(status, "🔔")
+            
             st.markdown(
                 f'<div class="notif-banner {notif_cls}"><span class="nb-icon">{icon}</span>'
-                f'<div><div class="nb-title">Your application for <strong>{notif.get("job_title","—")}</strong> at {notif.get("company_name","—")} is now: {status}</div>'
+                f'<div><div class="nb-title">Your application for <strong>{job_title}</strong>{display_comp} is now: {status}</div>'
                 f'<div class="nb-sub">// updated {notif.get("last_status_change","")[:10]}</div></div></div>',
                 unsafe_allow_html=True
             )
@@ -1004,9 +1042,12 @@ def _candidate_overview_tab():
     if newly_cancelled:
         st.markdown('<div class="section-heading">⏰ Interview Deadlines Passed</div>', unsafe_allow_html=True)
         for nc in newly_cancelled:
+            job_title = nc.get("job_title") or "Interview"
+            company = nc.get("company_name")
+            display_comp = f" at {company}" if company and company.strip() and company != "—" else ""
             st.markdown(
                 f'<div class="notif-banner notif-rejected"><span class="nb-icon">⏰</span>'
-                f'<div><div class="nb-title">Interview session for <strong>{nc.get("job_title","—")}</strong> at {nc.get("company_name","—")} was cancelled — deadline passed</div>'
+                f'<div><div class="nb-title">Interview session for <strong>{job_title}</strong>{display_comp} was cancelled — deadline passed</div>'
                 f'<div class="nb-sub">// you did not complete the AI interview within 48 hours</div></div></div>',
                 unsafe_allow_html=True
             )
@@ -1015,13 +1056,29 @@ def _candidate_overview_tab():
     if notifications:
         st.markdown('<div class="section-heading">🔔 Updates since last login</div>', unsafe_allow_html=True)
         for notif in notifications:
+            # FORCE FETCH: Agar notif mein company nahi, to direct DB se check karein
+            job_title = notif.get("job_title") or "Interview"
+            company = notif.get("company_name")
+            
+            # Agar company nahi mil rahi, to job_id ke zariye database se verify karein
+            if not company or company == "—":
+                job_id = notif.get("job_id")
+                if job_id:
+                    # Recruiter ke postings se company name nikalne ki koshish
+                    job_data = realtime_db.reference(f"recruiters/{notif.get('recruiter_uid')}/job_postings/{job_id}").get()
+                    if job_data:
+                        company = job_data.get("company_name")
+
+            display_comp = f" at {company}" if company and company != "—" else ""
+            
             status    = notif.get("status", "")
             notif_cls = {"Shortlisted": "notif-shortlisted", "Hired": "notif-hired", "Rejected": "notif-rejected",
                          "Interview Scheduled": "notif-hired", "Cancelled": "notif-rejected"}.get(status, "notif-shortlisted")
             icon = {"Shortlisted": "⭐", "Hired": "🎉", "Rejected": "📭", "Interview Scheduled": "📅", "Cancelled": "⏰"}.get(status, "🔔")
+            
             st.markdown(
                 f'<div class="notif-banner {notif_cls}"><span class="nb-icon">{icon}</span>'
-                f'<div><div class="nb-title"><strong>{notif.get("job_title","—")}</strong> at {notif.get("company_name","—")} — status changed to: {status}</div>'
+                f'<div><div class="nb-title"><strong>{job_title}</strong>{display_comp} — status changed to: {status}</div>'
                 f'<div class="nb-sub">// updated {notif.get("last_status_change","")[:10]}</div></div></div>',
                 unsafe_allow_html=True
             )

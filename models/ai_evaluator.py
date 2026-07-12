@@ -1,11 +1,27 @@
 # models/ai_evaluator.py
 import json
 import os
+import streamlit as st
 import google.generativeai as genai_sdk
 from dotenv import load_dotenv
 
 # Load environment variables from .env file for local development
 load_dotenv()
+
+@st.cache_resource
+def get_gemini_model():
+    """Cache the Gemini model initialization so it doesn't reload on every call."""
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        # Streamlit secrets fallback
+        if "GEMINI_API_KEY" in st.secrets:
+            api_key = st.secrets["GEMINI_API_KEY"]
+        else:
+            return None
+            
+    genai_sdk.configure(api_key=api_key)
+    return genai_sdk.GenerativeModel("gemini-1.5-flash")
+
 
 def generate_interview_questions(ctx: dict, profile: dict, num_q: int) -> list:
     """Call Gemini API to produce `num_q` interview questions as JSON."""
@@ -46,17 +62,10 @@ def generate_interview_questions(ctx: dict, profile: dict, num_q: int) -> list:
     ]"""
 
     try:
-        api_key = os.environ.get("GEMINI_API_KEY", "")
-        if not api_key:
-            import streamlit as st
-            # Streamlit secrets fallback
-            if "GEMINI_API_KEY" in st.secrets:
-                api_key = st.secrets["GEMINI_API_KEY"]
-            else:
-                raise ValueError("GEMINI_API_KEY not set in .env or secrets")
+        model = get_gemini_model()
+        if not model:
+            raise ValueError("GEMINI_API_KEY not set in .env or secrets")
 
-        genai_sdk.configure(api_key=api_key)
-        model = genai_sdk.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         raw = response.text.strip()
         
@@ -70,7 +79,7 @@ def generate_interview_questions(ctx: dict, profile: dict, num_q: int) -> list:
 
     except Exception as e:
         print(f"Error generating questions via API: {e}")
-        # Yahan fallback map wali logic wese hi rahegi jo aapki pehlay thi
+        # Yahan fallback map wali logic wese hi rahegi
         return [{"question": f"Fallback Technical Question for {job_title}?", "category": "Technical", "expected_keywords": []}] * num_q
 
 
@@ -95,16 +104,10 @@ def evaluate_answer(question: str, answer: str, category: str, expected_keywords
     {{"score": <0-100>, "feedback": "<2 sentences of constructive feedback>", "correct": <true if score>=60>}}"""
 
     try:
-        api_key = os.environ.get("GEMINI_API_KEY", "")
-        if not api_key:
-            import streamlit as st
-            if "GEMINI_API_KEY" in st.secrets:
-                api_key = st.secrets["GEMINI_API_KEY"]
-            else:
-                raise ValueError("No API key")
-                
-        genai_sdk.configure(api_key=api_key)
-        model = genai_sdk.GenerativeModel("gemini-1.5-flash")
+        model = get_gemini_model()
+        if not model:
+            raise ValueError("No API key")
+            
         response = model.generate_content(prompt)
         raw = response.text.strip()
         if raw.startswith("```"):

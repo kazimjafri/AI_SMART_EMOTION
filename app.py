@@ -49,33 +49,39 @@ st.set_page_config(
 )
 
 # ===========================
-# FIREBASE INITIALIZATION
+# FIREBASE INITIALIZATION (CACHED)
 # ===========================
-if firebase_admin._apps:
-    firebase_admin.delete_app(firebase_admin.get_app())
+@st.cache_resource
+def init_firebase():
+    # Sirf ek dafa initialize hoga
+    if not firebase_admin._apps:
+        cred = credentials.Certificate("ServiceAccountKey.json")
+        firebase_admin.initialize_app(cred, {
+            "databaseURL": "https://aiemotioninterviewer-default-rtdb.firebaseio.com"
+        })
 
-cred = credentials.Certificate("ServiceAccountKey.json")
-firebase_admin.initialize_app(cred, {
-    "databaseURL": "https://aiemotioninterviewer-default-rtdb.firebaseio.com"
-})
+    firebaseConfig = {
+        "apiKey":            "AIzaSyAnlL4zPDarYCNOZp2j33mdkWWwaqDH93c",
+        "authDomain":        "aiemotioninterviewer.firebaseapp.com",
+        "databaseURL":       "https://aiemotioninterviewer-default-rtdb.firebaseio.com",
+        "projectId":         "aiemotioninterviewer",
+        "storageBucket":     "aiemotioninterviewer.firebasestorage.app",
+        "messagingSenderId": "434777979901",
+        "appId":             "1:434777979901:web:020bde1dc5e1086f317794"
+    }
 
-firebaseConfig = {
-    "apiKey":            "AIzaSyAnlL4zPDarYCNOZp2j33mdkWWwaqDH93c",
-    "authDomain":        "aiemotioninterviewer.firebaseapp.com",
-    "databaseURL":       "https://aiemotioninterviewer-default-rtdb.firebaseio.com",
-    "projectId":         "aiemotioninterviewer",
-    "storageBucket":     "aiemotioninterviewer.firebasestorage.app",
-    "messagingSenderId": "434777979901",
-    "appId":             "1:434777979901:web:020bde1dc5e1086f317794"
-}
+    fb_app = pyrebase.initialize_app(firebaseConfig)
+    return fb_app
 
-firebase_app  = pyrebase.initialize_app(firebaseConfig)
+# Cached instance ko call karein
+firebase_app  = init_firebase()
 client_auth   = firebase_app.auth()
 pyrebase_db   = firebase_app.database()
 
 # ===========================
-# FIRESTORE CLIENT (optional)
+# FIRESTORE CLIENT (CACHED)
 # ===========================
+@st.cache_resource
 def get_firestore_client():
     if not FIRESTORE_AVAILABLE:
         return None
@@ -757,10 +763,14 @@ def auth_page():
 
         with tab_login:
             st.markdown("<br>", unsafe_allow_html=True)
-            login_email    = st.text_input("Email address", placeholder="you@example.com", key="login_email")
-            login_password = st.text_input("Password", type="password", placeholder="••••••••", key="login_password")
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Sign In →", use_container_width=True, key="login_btn"):
+            # --- FORM HERE ---
+            with st.form("login_form"):
+                login_email    = st.text_input("Email address", placeholder="you@example.com")
+                login_password = st.text_input("Password", type="password", placeholder="••••••••")
+                st.markdown("<br>", unsafe_allow_html=True)
+                login_submitted = st.form_submit_button("Sign In →", use_container_width=True)
+                
+            if login_submitted:
                 if not login_email.strip():
                     st.error("❌ Please enter your email.")
                 elif not login_password:
@@ -775,13 +785,17 @@ def auth_page():
 
         with tab_register:
             st.markdown("<br>", unsafe_allow_html=True)
-            reg_name    = st.text_input("Full name", placeholder="Jane Smith", key="reg_name")
-            reg_email   = st.text_input("Email address", placeholder="you@example.com", key="reg_email")
-            reg_pass    = st.text_input("Password", type="password", placeholder="Min. 6 characters", key="reg_pass")
-            reg_confirm = st.text_input("Confirm password", type="password", placeholder="Repeat password", key="reg_confirm")
-            reg_role    = st.selectbox("Role", ["Candidate", "Recruiter", "Admin"], key="reg_role")
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Create Account →", use_container_width=True, key="register_btn"):
+            # --- FORM HERE ---
+            with st.form("register_form"):
+                reg_name    = st.text_input("Full name", placeholder="Jane Smith")
+                reg_email   = st.text_input("Email address", placeholder="you@example.com")
+                reg_pass    = st.text_input("Password", type="password", placeholder="Min. 6 characters")
+                reg_confirm = st.text_input("Confirm password", type="password", placeholder="Repeat password")
+                reg_role    = st.selectbox("Role", ["Candidate", "Recruiter", "Admin"])
+                st.markdown("<br>", unsafe_allow_html=True)
+                reg_submitted = st.form_submit_button("Create Account →", use_container_width=True)
+                
+            if reg_submitted:
                 if not reg_name.strip():
                     st.error("❌ Please enter your full name.")
                 elif not reg_email.strip():
