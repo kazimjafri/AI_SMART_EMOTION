@@ -7,13 +7,11 @@ import streamlit as st
 import time
 from datetime import datetime, timedelta
 from firebase_admin import db as realtime_db
-from dashboard.candidate import compute_match_score, _match_badge_html
 
 # ===========================
 # RECRUITER FIREBASE HELPERS
 # ===========================
 
-@st.cache_data(ttl=120)
 def load_recruiter_profile(uid: str) -> dict:
     try:
         snapshot = realtime_db.reference(f"recruiters/{uid}").get()
@@ -28,8 +26,7 @@ def save_recruiter_profile(uid: str, data: dict) -> bool:
         data["updated_at"]       = datetime.utcnow().isoformat()
         data["uid"]              = uid
         data["email"]            = st.session_state.user_email
-        realtime_db.reference(f"recruiters/{uid}").set(data)
-        load_recruiter_profile.clear() # Clear cache on save
+        realtime_db.reference(f"recruiters/{uid}").update(data)
         return True
     except Exception as e:
         st.error(f"❌ Failed to save recruiter profile: {str(e)}")
@@ -47,20 +44,11 @@ def post_job_requirement(uid: str, job_data: dict) -> bool:
         push_ref = realtime_db.reference(f"recruiters/{uid}/job_postings").push(job_data)
         job_data["rtdb_key"] = push_ref.key
 
-        try:
-            from google.cloud import firestore as gcloud_firestore
-            fs = gcloud_firestore.Client(project="aiemotioninterviewer")
-            fs.collection("job_postings").add(job_data)
-        except Exception:
-            pass
-            
-        load_job_postings.clear() # Clear cache on post
         return True
     except Exception as e:
         st.error(f"❌ Failed to post job: {str(e)}")
         return False
 
-@st.cache_data(ttl=300)
 def load_job_postings(uid: str) -> list:
     try:
         snapshot = realtime_db.reference(f"recruiters/{uid}/job_postings").get()
@@ -70,7 +58,6 @@ def load_job_postings(uid: str) -> list:
     except Exception:
         return []
 
-@st.cache_data(ttl=120)
 def load_applications(uid: str) -> list:
     try:
         snapshot = realtime_db.reference(f"recruiters/{uid}/applications").get()
@@ -80,40 +67,25 @@ def load_applications(uid: str) -> list:
     except Exception:
         return []
 
-@st.cache_data(ttl=300)
-def load_interview_report(candidate_uid: str) -> dict:
+def load_interview_report(candidate_uid: str, app_key: str = "") -> dict:
     try:
+        if app_key:
+            snapshot = realtime_db.reference(f"interview_reports/{candidate_uid}/{app_key}").get()
+            if snapshot:
+                return snapshot
+
+        # Fallback: no app_key given, or nothing found at that key —
+        # grab the most recent report under this candidate_uid.
         snapshot = realtime_db.reference(f"interview_reports/{candidate_uid}").get()
         if snapshot:
-            return snapshot
-        raise ValueError("no data")
+            if "overall_score" in snapshot:
+                return snapshot
+            reports = list(snapshot.values())
+            reports.sort(key=lambda r: r.get("completed_at", ""), reverse=True)
+            return reports[0] if reports else {}
+        return {}
     except Exception:
-        return _mock_interview_report(candidate_uid)
-
-
-def _mock_interview_report(candidate_uid: str) -> dict:
-    import random
-    random.seed(hash(candidate_uid) % 100)
-    timeline = []
-    confidence, stress = 55, 30
-    for i in range(20):
-        confidence = max(10, min(95, confidence + random.randint(-8, 12)))
-        stress     = max(5,  min(80, stress     + random.randint(-6, 9)))
-        timeline.append({
-            "frame": i + 1, "confidence": confidence,
-            "stress": stress, "neutral": max(0, 100 - confidence - stress),
-        })
-    emotions = ["Confident", "Neutral", "Focused", "Nervous", "Enthusiastic"]
-    return {
-        "candidate_uid":      candidate_uid,
-        "avg_speech_clarity": random.randint(68, 95),
-        "speech_tempo_wpm":   random.randint(110, 165),
-        "dominant_emotion":   emotions[hash(candidate_uid) % len(emotions)],
-        "overall_score":      random.randint(62, 94),
-        "emotion_timeline":   timeline,
-        "pdf_report_url":     f"https://storage.googleapis.com/aiemotioninterviewer.firebasestorage.app/reports/{candidate_uid}_report.pdf",
-        "completed_at":       "2026-05-30T16:45:00",
-    }
+        return {}
 
 
 def update_application_status(
@@ -190,25 +162,6 @@ def recruiter_overview_tab(apps: list, postings: list):
     ]):
         with col:
             st.markdown(f'<div class="stat-card"><div class="stat-num">{n}<span>{sfx}</span></div><div class="stat-label">{lbl}</div></div>', unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown('<div class="section-heading">Quick actions</div>', unsafe_allow_html=True)
-    qa1, qa2, qa3 = st.columns(3, gap="medium")
-    with qa1:
-        st.markdown("""<div class="qa-card"><span class="qa-icon">📋</span><div><div class="qa-title">Post a Job</div><div class="qa-sub">// create new requirement</div></div></div>""", unsafe_allow_html=True)
-        if st.button("Post →", key="rec_ov_post", use_container_width=True):
-            st.session_state._rec_goto_post = True
-            st.rerun()
-    with qa2:
-        st.markdown("""<div class="qa-card"><span class="qa-icon">📥</span><div><div class="qa-title">View Applications</div><div class="qa-sub">// review queue</div></div></div>""", unsafe_allow_html=True)
-        if st.button("Review →", key="rec_ov_apps", use_container_width=True):
-            st.session_state._rec_goto_applications = True
-            st.rerun()
-    with qa3:
-        st.markdown("""<div class="qa-card"><span class="qa-icon">📊</span><div><div class="qa-title">Reports Hub</div><div class="qa-sub">// AI evaluations</div></div></div>""", unsafe_allow_html=True)
-        if st.button("View →", key="rec_ov_reports", use_container_width=True):
-            st.session_state._rec_goto_reports = True
-            st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown('<div class="section-heading">Recent applications</div>', unsafe_allow_html=True)
@@ -360,16 +313,30 @@ def post_requirements_tab():
             location = st.text_input("Location (optional)", placeholder="e.g. Karachi, Remote-Global", key="pr_location")
 
         ALL_SKILLS = [
-            "Python", "JavaScript", "TypeScript", "Java", "C++", "C#", "Go", "Rust",
-            "SQL", "NoSQL", "PostgreSQL", "MongoDB", "Redis",
-            "React", "Vue", "Angular", "Next.js", "Node.js", "Django", "FastAPI", "Flask",
-            "TensorFlow", "PyTorch", "Scikit-learn", "Keras", "HuggingFace",
-            "MLOps", "LangChain", "OpenCV", "NLP", "Computer Vision",
-            "AWS", "GCP", "Azure", "Docker", "Kubernetes", "Terraform",
-            "Spark", "Kafka", "Airflow", "dbt",
-            "Git", "Linux", "REST APIs", "GraphQL", "Microservices",
-            "Figma", "Tableau", "Power BI", "Excel",
-            "Leadership", "Communication", "Project Management", "Agile / Scrum",
+            # Programming & Scripting
+            "Python", "JavaScript", "TypeScript", "Java", "C++", "C#", "Go", "Rust", "Ruby", "PHP", "Bash", "PowerShell",
+            
+            # Web & Mobile Development
+            "React", "Vue", "Angular", "Next.js", "Node.js", "Django", "FastAPI", "Flask", "HTML", "CSS", "Swift", "Kotlin", "Flutter",
+            
+            # Data Science, AI & Analytics
+            "TensorFlow", "PyTorch", "Scikit-learn", "Keras", "HuggingFace", "MLOps", "LangChain", "OpenCV", "NLP", 
+            "Computer Vision", "Tableau", "Power BI", "Excel", "Spark", "Kafka", "Airflow", "dbt", "Pandas", "NumPy",
+            
+            # Databases
+            "SQL", "NoSQL", "PostgreSQL", "MongoDB", "Redis", "Oracle", "MySQL", "Cassandra",
+            
+            # Cloud, DevOps & Infrastructure
+            "AWS", "GCP", "Azure", "Docker", "Kubernetes", "Terraform", "Ansible", "Jenkins", "Linux", "Windows Server", 
+            "Virtualization", "Networking", "VPN", "Firewalls",
+            
+            # Cybersecurity
+            "Penetration Testing", "Encryption", "Identity Management", "Security Auditing", "Malware Analysis", 
+            "Incident Response", "Compliance (HIPAA/GDPR)",
+            
+            # Project Management & Soft Skills
+            "Git", "REST APIs", "GraphQL", "Microservices", "Agile / Scrum", "Project Management", "Leadership", 
+            "Communication", "Technical Writing", "UX Design", "Figma", "SEO", "CRM (Salesforce/HubSpot)"
         ]
 
         st.markdown('<div class="profile-sec"><span class="ps-num">02</span><span class="ps-title">Technical Requirements</span><span class="ps-desc">// core skills</span></div>', unsafe_allow_html=True)
@@ -379,6 +346,7 @@ def post_requirements_tab():
             st.markdown(f'<div style="margin-top:6px;">{pills}</div>', unsafe_allow_html=True)
         nice_to_have = st.multiselect("Nice-to-have skills (optional)", options=[s for s in ALL_SKILLS if s not in core_skills], key="pr_nice_to_have")
 
+        # AI Interview Thresholds (Section 03)
         st.markdown('<div class="profile-sec"><span class="ps-num">03</span><span class="ps-title">AI Interview Thresholds</span><span class="ps-desc">// evaluation criteria</span></div>', unsafe_allow_html=True)
         col_e, col_f = st.columns(2, gap="medium")
         with col_e:
@@ -387,6 +355,16 @@ def post_requirements_tab():
         with col_f:
             min_score = st.slider("Minimum overall AI score (%)", 0, 100, 60, 5, key="pr_min_score")
             st.caption(f"// auto-reject below {min_score}% overall score")
+
+        # Interview Length (Section 04 - Separate Row/Col)
+        st.markdown('<div class="profile-sec"><span class="ps-num">04</span><span class="ps-title">Interview Questions</span><span class="ps-desc">// question count</span></div>', unsafe_allow_html=True)
+        num_questions = st.select_slider(
+            "Select number of questions for AI interview",
+            options=[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+            value=10,
+            key="pr_num_questions"
+        )
+        st.caption("// Determines how many questions the AI will ask during the session.")
 
         col_g, col_h = st.columns(2, gap="medium")
         with col_g:
@@ -406,13 +384,15 @@ def post_requirements_tab():
 
     # 🛑 YAHAN FORM SUBMIT HONE KE BAAD DATABASE MEIN SAVE HOGA
     if submit_job:
+        rec_profile = load_recruiter_profile(uid)
         errors = []
         if not job_title.strip(): errors.append("Job title is required.")
         if not core_skills:       errors.append("Select at least one core skill.")
+        if not rec_profile.get("company_name", "").strip():
+            errors.append("Your recruiter profile has no company name saved — please complete your profile (Company Info tab) before posting a job.")
         for err in errors:
             st.error(f"❌ {err}")
         if not errors:
-            rec_profile = load_recruiter_profile(uid)
             payload = {
                 "job_title":          job_title.strip(),
                 "company_name":       rec_profile.get("company_name", ""),
@@ -426,6 +406,7 @@ def post_requirements_tab():
                 "min_score":          min_score,
                 "target_trait":       target_trait,
                 "interview_type":     interview_type,
+                "num_questions":      num_questions,
                 "job_description":    job_description.strip(),
             }
             with st.spinner("Posting to Firebase..."):
@@ -462,6 +443,11 @@ def post_requirements_tab():
 
 def incoming_applications_tab():
     uid = st.session_state.user_uid
+
+    top_l, top_r = st.columns([5, 1])
+    with top_r:
+        if st.button("🔄 Refresh", key="apps_manual_refresh", use_container_width=True):
+            st.rerun()
 
     st.markdown(
         '<div style="font-family:\'Sora\',sans-serif;font-size:1.05rem;font-weight:700;color:var(--text-h);margin-bottom:0.2rem;">Incoming Applications</div>'
@@ -530,21 +516,13 @@ def incoming_applications_tab():
 
     st.markdown('<div class="section-heading">Application queue</div>', unsafe_allow_html=True)
 
-    from dashboard.candidate import compute_match_score
-
     for idx, app in enumerate(filtered):
-        # Match Score Calculation
-        cand_uid = app.get("candidate_uid", "")
-        job_id = app.get("job_id", "")
-        cand_profile = realtime_db.reference(f"users/{cand_uid}/candidate_profile").get() or {}
-        cand_skills = cand_profile.get("primary_skills", "")
-        job_data = realtime_db.reference(f"recruiters/{uid}/job_postings/{job_id}").get() or {}
-        job_skills = job_data.get("core_skills", [])
-        
-        match = compute_match_score(cand_skills, job_skills)
-        pct = match["pct"]
-        css = "match-high" if pct >= 70 else ("match-mid" if pct >= 40 else "match-low")
-        badge_html = f'<span class="match-badge {css}" style="margin-left:10px; font-size:0.7rem;">● {pct}% Match</span>'
+
+        cand_uid    = app.get("candidate_uid", "")
+        app_key     = app.get("key", "")
+        cand_app_key = app.get("candidate_app_key", "") or app_key
+        cand_name   = app.get("candidate_name", "—")
+        job_title   = app.get("job_title", "—")
 
         # Existing Variables
         status      = app.get("status", "Applied")
@@ -579,7 +557,7 @@ def incoming_applications_tab():
         <div class="cand-card">
           <div class="cc-header">
             <div class="cc-avatar">{initials}</div>
-            <div style="flex:1;"><div class="cc-name">{cand_name} {badge_html}</div><div class="cc-role">// {job_title}</div></div>
+            <div style="flex:1;"><div class="cc-name">{cand_name}</div><div class="cc-role">// {job_title}</div></div>
             <div style="display:flex;flex-direction:column;align-items:flex-end;gap:0.35rem;">
               {_rec_status_badge(status)}{deadline_html}
             </div>
@@ -620,7 +598,7 @@ def incoming_applications_tab():
                     deadline = (datetime.utcnow() + timedelta(hours=48)).isoformat()
                     with st.spinner("Updating..."):
                         ok = update_application_status(
-                            candidate_uid=cand_uid, app_key=app_key,
+                            candidate_uid=cand_uid, app_key=cand_app_key,
                             recruiter_uid=uid, recruiter_app_key=app_key,
                             new_status="Interview Scheduled", interview_deadline=deadline
                         )
@@ -647,7 +625,7 @@ def incoming_applications_tab():
                 if st.button("Yes, Reject", key=f"yes_reject_{app_key}_{idx}", use_container_width=True):
                     with st.spinner("Updating..."):
                         ok = update_application_status(
-                            candidate_uid=cand_uid, app_key=app_key,
+                            candidate_uid=cand_uid, app_key=cand_app_key,
                             recruiter_uid=uid, recruiter_app_key=app_key,
                             new_status="Rejected"
                         )
@@ -714,8 +692,11 @@ def interview_reports_hub_tab():
     </div>
     """, unsafe_allow_html=True)
 
+    selected_app = completed_apps[sel_idx]
+    selected_app_key = selected_app.get("candidate_app_key", "") or selected_app.get("key", "")
+
     with st.spinner("Fetching AI evaluation data..."):
-        report = load_interview_report(selected_uid)
+        report = load_interview_report(selected_uid, selected_app_key)
 
     overall_score    = report.get("overall_score", 0)
     speech_clarity   = report.get("avg_speech_clarity", 0)
@@ -741,44 +722,6 @@ def interview_reports_hub_tab():
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown('<div class="section-heading">Key performance metrics</div>', unsafe_allow_html=True)
-    m1, m2, m3, m4 = st.columns(4, gap="small")
-    with m1:
-        st.metric("🎙️ Avg Speech Clarity", f"{speech_clarity}%", "above threshold" if speech_clarity >= 70 else "below threshold", delta_color="normal" if speech_clarity >= 70 else "inverse")
-    with m2:
-        st.metric("⚡ Speech Tempo", f"{tempo_wpm} WPM", "optimal range" if 110 <= tempo_wpm <= 160 else "outside optimal", delta_color="normal" if 110 <= tempo_wpm <= 160 else "off")
-    with m3:
-        st.metric("😊 Dominant Emotion", dominant_emotion)
-    with m4:
-        st.metric("🏆 Overall Score", f"{overall_score}/100", "pass" if overall_score >= 60 else "fail", delta_color="normal" if overall_score >= 60 else "inverse")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown('<div class="section-heading">Emotion timeline — frame-by-frame</div>', unsafe_allow_html=True)
-    if emotion_timeline:
-        import pandas as pd
-        df = pd.DataFrame(emotion_timeline).rename(columns={
-            "frame": "Frame", "confidence": "Confidence (%)", "stress": "Stress (%)", "neutral": "Neutral (%)"
-        }).set_index("Frame")
-        st.line_chart(df[["Confidence (%)", "Stress (%)", "Neutral (%)"]], use_container_width=True, height=300)
-        st.caption(
-            f"// {len(emotion_timeline)} frames sampled · "
-            f"avg confidence: {sum(r['confidence'] for r in emotion_timeline)//len(emotion_timeline)}% · "
-            f"avg stress: {sum(r['stress'] for r in emotion_timeline)//len(emotion_timeline)}%"
-        )
-    else:
-        st.info("No timeline data available for this candidate.")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown('<div class="section-heading">Behavioral analysis</div>', unsafe_allow_html=True)
-    b1, b2, b3 = st.columns(3, gap="medium")
-    for col, (label, value, icon) in zip([b1, b2, b3], [
-        ("Eye Contact Consistency", f"{min(95, speech_clarity + 5)}%",  "fa-eye"),
-        ("Answer Coherence",        f"{min(98, overall_score + 8)}%",   "fa-brain"),
-        ("Vocabulary Richness",     f"{min(92, tempo_wpm // 2)}%",      "fa-spell-check"),
-    ]):
-        with col:
-            st.markdown(f"""<div class="report-metric"><div style="font-size:1.4rem;color:var(--accent);margin-bottom:0.4rem;"><i class="fa-solid {icon}"></i></div><div class="rm-value">{value}</div><div class="rm-label">{label}</div></div>""", unsafe_allow_html=True)
-
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown('<div class="section-heading">Download evaluation report</div>', unsafe_allow_html=True)
     st.markdown(f"""
@@ -786,22 +729,21 @@ def interview_reports_hub_tab():
       <span style="font-size:2rem;">📄</span>
       <div style="flex:1;">
         <div style="font-family:'Sora',sans-serif;font-size:0.92rem;font-weight:700;color:var(--text-h);letter-spacing:-0.2px;">AI Evaluation Report — {selected_name}</div>
-        <div style="font-family:'DM Mono',monospace;font-size:0.68rem;color:var(--text-muted);margin-top:3px;letter-spacing:0.3px;">// full pdf · speech transcript · emotion heatmap · gemini feedback · score breakdown</div>
-        <div style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--accent);margin-top:5px;letter-spacing:0.3px;word-break:break-all;">{pdf_url}</div>
+        <div style="font-family:'DM Mono',monospace;font-size:0.68rem;color:var(--text-muted);margin-top:3px;letter-spacing:0.3px;">// full pdf · speech transcript · gemini feedback · score breakdown</div>
       </div>
     </div>
     """, unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Try to find app_key for this candidate
+    # Find the candidate's own app_key (not recruiter's) for this report
     app_key_for_report = ""
     try:
         rec_apps = realtime_db.reference(f"recruiters/{uid}/applications").get()
         if rec_apps:
             for k, v in rec_apps.items():
                 if v.get("candidate_uid") == selected_uid:
-                    app_key_for_report = k
+                    app_key_for_report = v.get("candidate_app_key", "") or k
                     break
     except Exception:
         pass
@@ -812,8 +754,6 @@ def interview_reports_hub_tab():
         try:
             if app_key_for_report:
                 rpt_fetched = realtime_db.reference(f"interview_reports/{selected_uid}/{app_key_for_report}").get()
-            if not rpt_fetched:
-                rpt_fetched = realtime_db.reference(f"interview_reports/{selected_uid}").get()
         except Exception:
             pass
 

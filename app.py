@@ -190,7 +190,68 @@ def firebase_login(email: str, password: str) -> bool:
         except Exception:
             st.session_state.recruiter_profile_setup = False
 
+    # Persist login in the URL so a browser refresh can restore the session
+    st.query_params["uid"]  = uid
+    st.query_params["role"] = role
+
     return True
+
+
+def restore_session_from_query_params():
+    """
+    Called once per script run. If the browser was refreshed (which wipes
+    st.session_state but NOT the URL), this re-hydrates the session from
+    Firebase using the uid saved in the URL — so the user stays logged in
+    and lands back on the dashboard instead of the home/login page.
+
+    Note: this trusts the uid in the URL without re-checking the password.
+    That's an acceptable tradeoff for this app, but keep in mind anyone who
+    gets hold of that URL could open the dashboard as that user.
+    """
+    if st.session_state.get("logged_in", False):
+        return  # already have a live session, nothing to restore
+
+    uid  = st.query_params.get("uid", "")
+    role = st.query_params.get("role", "")
+    if not uid:
+        return
+
+    try:
+        snapshot = realtime_db.reference(f"users/{uid}").get()
+    except Exception:
+        snapshot = None
+
+    if not snapshot:
+        st.query_params.clear()
+        return
+
+    name = snapshot.get("name", "User")
+    role = snapshot.get("role", role or "Candidate")
+    candidate_profile = snapshot.get("candidate_profile", {})
+    profile_setup = bool(candidate_profile and candidate_profile.get("profile_complete", False))
+
+    st.session_state.logged_in     = True
+    st.session_state.user_name     = name
+    st.session_state.user_email    = snapshot.get("email", "")
+    st.session_state.user_role     = role
+    st.session_state.user_uid      = uid
+    st.session_state.profile_setup = profile_setup
+    st.session_state.current_page  = "dashboard"
+
+    try:
+        last_seen_snap = realtime_db.reference(f"users/{uid}/last_seen").get()
+        st.session_state.last_seen_timestamp = last_seen_snap if last_seen_snap else ""
+    except Exception:
+        st.session_state.last_seen_timestamp = ""
+
+    if role == "Recruiter":
+        try:
+            rec_snap = realtime_db.reference(f"recruiters/{uid}").get()
+            st.session_state.recruiter_profile_setup = bool(
+                rec_snap and rec_snap.get("profile_complete", False)
+            )
+        except Exception:
+            st.session_state.recruiter_profile_setup = False
 
 
 def firebase_register(name: str, email: str, password: str, role: str) -> bool:
@@ -251,6 +312,7 @@ def firebase_logout():
     st.session_state.job_interview_context = None
     st.session_state._rec_goto_post        = False
     st.session_state._rec_goto_applications= False
+    st.query_params.clear()
     navigate_to("home")
 
 
@@ -791,7 +853,7 @@ def auth_page():
                 reg_email   = st.text_input("Email address", placeholder="you@example.com")
                 reg_pass    = st.text_input("Password", type="password", placeholder="Min. 6 characters")
                 reg_confirm = st.text_input("Confirm password", type="password", placeholder="Repeat password")
-                reg_role    = st.selectbox("Role", ["Candidate", "Recruiter", "Admin"])
+                reg_role    = st.selectbox("Role", ["Candidate", "Recruiter"])
                 st.markdown("<br>", unsafe_allow_html=True)
                 reg_submitted = st.form_submit_button("Create Account →", use_container_width=True)
                 
@@ -980,6 +1042,7 @@ def interview_page():
 # ROUTING
 # ===========================
 def main():
+    restore_session_from_query_params()
     sidebar()
     page = st.session_state.current_page
 

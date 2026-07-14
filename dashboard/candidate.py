@@ -5,16 +5,59 @@
 
 import streamlit as st
 import base64
+import json
 import time
 from datetime import datetime
 from firebase_admin import db as realtime_db
 
 
 # ===========================
+# SKILLS OPTIONS
+# ===========================
+
+ALL_SKILLS = [
+    # Programming & Scripting
+    "Python", "JavaScript", "TypeScript", "Java", "C++", "C#", "Go", "Rust", "Ruby", "PHP", "Bash", "PowerShell",
+
+    # Web & Mobile Development
+    "React", "Vue", "Angular", "Next.js", "Node.js", "Django", "FastAPI", "Flask", "HTML", "CSS", "Swift", "Kotlin", "Flutter",
+
+    # Data Science, AI & Analytics
+    "TensorFlow", "PyTorch", "Scikit-learn", "Keras", "HuggingFace", "MLOps", "LangChain", "OpenCV", "NLP",
+    "Computer Vision", "Tableau", "Power BI", "Excel", "Spark", "Kafka", "Airflow", "dbt", "Pandas", "NumPy",
+
+    # Databases
+    "SQL", "NoSQL", "PostgreSQL", "MongoDB", "Redis", "Oracle", "MySQL", "Cassandra",
+
+    # Cloud, DevOps & Infrastructure
+    "AWS", "GCP", "Azure", "Docker", "Kubernetes", "Terraform", "Ansible", "Jenkins", "Linux", "Windows Server",
+    "Virtualization", "Networking", "VPN", "Firewalls",
+
+    # Cybersecurity
+    "Penetration Testing", "Encryption", "Identity Management", "Security Auditing", "Malware Analysis",
+    "Incident Response", "Compliance (HIPAA/GDPR)",
+
+    # Project Management & Soft Skills
+    "Git", "REST APIs", "GraphQL", "Microservices", "Agile / Scrum", "Project Management", "Leadership",
+    "Communication", "Technical Writing", "UX Design", "Figma", "SEO", "CRM (Salesforce/HubSpot)"
+]
+
+
+def _skills_str_to_list(val) -> list:
+    """Normalize a stored skills value (string or list) into a clean list of skill names."""
+    if not val:
+        return []
+    if isinstance(val, list):
+        parts = val
+    else:
+        parts = str(val).split(",")
+    return [str(s).strip() for s in parts if str(s).strip()]
+
+
+# ===========================
 # CANDIDATE PROFILE HELPERS
 # ===========================
 
-@st.cache_data(ttl=120)
 def load_candidate_profile(uid: str) -> dict:
     try:
         snapshot = realtime_db.reference(f"users/{uid}/candidate_profile").get()
@@ -28,7 +71,6 @@ def save_candidate_profile(uid: str, profile_data: dict) -> bool:
         profile_data["profile_complete"] = True
         profile_data["updated_at"] = datetime.utcnow().isoformat()
         realtime_db.reference(f"users/{uid}/candidate_profile").set(profile_data)
-        load_candidate_profile.clear() # Form save hone par cache clear karna zaroori hai
         return True
     except Exception as e:
         st.error(f"❌ Failed to save profile: {str(e)}")
@@ -39,26 +81,9 @@ def save_candidate_profile(uid: str, profile_data: dict) -> bool:
 # CANDIDATE JOB / APPLICATION HELPERS
 # ===========================
 
-@st.cache_data(ttl=300)
 def load_all_job_postings() -> list:
-    """Fetch all active job postings across all recruiters. Falls back to rich mock data."""
+    """Fetch all active job postings across all recruiters from Firebase Realtime Database."""
     try:
-        from google.cloud import firestore as gcloud_firestore
-        try:
-            fs = gcloud_firestore.Client(project="aiemotioninterviewer")
-        except Exception:
-            fs = None
-
-        if fs:
-            docs = fs.collection("job_postings").where("status", "==", "active").stream()
-            results = []
-            for doc in docs:
-                d = doc.to_dict()
-                d["job_id"] = doc.id
-                results.append(d)
-            if results:
-                return results
-
         snapshot = realtime_db.reference("recruiters").get()
         if snapshot:
             results = []
@@ -69,118 +94,20 @@ def load_all_job_postings() -> list:
                         job["job_id"]        = key
                         job["recruiter_uid"] = rec_uid
                         results.append(job)
-            if results:
-                return results
-        raise ValueError("no data")
+            return results
+        return []
     except Exception:
-        return [
-            {
-                "job_id":           "job_mock_001",
-                "job_title":        "Senior ML Engineer",
-                "company_name":     "FinEdge AI",
-                "industry":         "FinTech",
-                "work_mode":        "Hybrid",
-                "location":         "Karachi",
-                "experience_level": "Senior",
-                "recruiter_uid":    "rec_uid_001",
-                "recruiter_name":   "Zara Ahmed",
-                "core_skills":      ["Python", "TensorFlow", "SQL", "MLOps", "Docker"],
-                "nice_to_have":     ["Kubernetes", "Spark"],
-                "min_speech_clarity": 75,
-                "min_score":        70,
-                "target_trait":     "Analytical",
-                "interview_type":   "Technical",
-                "job_description":  "Build and deploy ML models at scale for our fraud detection platform.",
-                "posted_at":        "2026-05-28T10:00:00",
-                "status":           "active",
-            },
-            {
-                "job_id":           "job_mock_002",
-                "job_title":        "Full Stack Developer",
-                "company_name":     "CloudNest",
-                "industry":         "Technology",
-                "work_mode":        "Remote",
-                "location":         "Remote-Global",
-                "experience_level": "Mid-Level",
-                "recruiter_uid":    "rec_uid_002",
-                "recruiter_name":   "Omar Farooq",
-                "core_skills":      ["React", "Node.js", "TypeScript", "PostgreSQL"],
-                "nice_to_have":     ["Docker", "GraphQL", "AWS"],
-                "min_speech_clarity": 65,
-                "min_score":        60,
-                "target_trait":     "Collaborative",
-                "interview_type":   "Mixed",
-                "job_description":  "Join our distributed team building next-gen cloud infrastructure tooling.",
-                "posted_at":        "2026-05-30T08:30:00",
-                "status":           "active",
-            },
-            {
-                "job_id":           "job_mock_003",
-                "job_title":        "Data Analyst",
-                "company_name":     "HealthSpark",
-                "industry":         "HealthTech",
-                "work_mode":        "On-site",
-                "location":         "Lahore",
-                "experience_level": "Fresher",
-                "recruiter_uid":    "rec_uid_003",
-                "recruiter_name":   "Sana Malik",
-                "core_skills":      ["SQL", "Python", "Tableau", "Excel"],
-                "nice_to_have":     ["Power BI", "R"],
-                "min_speech_clarity": 60,
-                "min_score":        55,
-                "target_trait":     "Results-Oriented",
-                "interview_type":   "HR",
-                "job_description":  "Analyse patient outcome data to drive clinical decision-making.",
-                "posted_at":        "2026-06-01T11:00:00",
-                "status":           "active",
-            },
-            {
-                "job_id":           "job_mock_004",
-                "job_title":        "DevOps Engineer",
-                "company_name":     "ScaleOps",
-                "industry":         "Technology",
-                "work_mode":        "Hybrid",
-                "location":         "Islamabad",
-                "experience_level": "Mid-Level",
-                "recruiter_uid":    "rec_uid_004",
-                "recruiter_name":   "Ali Hassan",
-                "core_skills":      ["Docker", "Kubernetes", "AWS", "Terraform", "Linux"],
-                "nice_to_have":     ["Kafka", "Airflow", "Python"],
-                "min_speech_clarity": 70,
-                "min_score":        65,
-                "target_trait":     "Analytical",
-                "interview_type":   "Technical",
-                "job_description":  "Maintain and scale our Kubernetes clusters serving 10M+ daily requests.",
-                "posted_at":        "2026-06-02T09:00:00",
-                "status":           "active",
-            },
-            {
-                "job_id":           "job_mock_005",
-                "job_title":        "NLP Research Engineer",
-                "company_name":     "LinguaLab",
-                "industry":         "Technology",
-                "work_mode":        "Remote",
-                "location":         "Remote-Global",
-                "experience_level": "Senior",
-                "recruiter_uid":    "rec_uid_005",
-                "recruiter_name":   "Fatima Qureshi",
-                "core_skills":      ["Python", "NLP", "HuggingFace", "PyTorch", "SQL"],
-                "nice_to_have":     ["LangChain", "MLOps", "REST APIs"],
-                "min_speech_clarity": 80,
-                "min_score":        75,
-                "target_trait":     "Creative",
-                "interview_type":   "Technical",
-                "job_description":  "Research and build multilingual NLP systems with a focus on Urdu and Arabic.",
-                "posted_at":        "2026-06-03T14:00:00",
-                "status":           "active",
-            },
-        ]
+        return []
 
 
-def compute_match_score(candidate_skills_str: str, job_skills: list) -> dict:
+def compute_match_score(candidate_skills_str, job_skills: list) -> dict:
     if not candidate_skills_str or not job_skills:
         return {"matched": 0, "total": len(job_skills) if job_skills else 0, "pct": 0}
-    candidate_set  = {s.strip().lower() for s in candidate_skills_str.split(",") if s.strip()}
+    if isinstance(candidate_skills_str, list):
+        candidate_parts = candidate_skills_str
+    else:
+        candidate_parts = candidate_skills_str.split(",")
+    candidate_set  = {str(s).strip().lower() for s in candidate_parts if str(s).strip()}
     job_set        = [s.strip().lower() for s in job_skills]
     matched_skills = [s for s in job_set if s in candidate_set]
     total  = len(job_set)
@@ -194,13 +121,15 @@ def compute_match_score(candidate_skills_str: str, job_skills: list) -> dict:
 
 
 def check_readiness(profile: dict) -> dict:
+    _bio_len = len(profile.get("bio", "").strip()) if profile else 0
     checks = {
         "profile_complete": bool(profile and profile.get("profile_complete")),
         "job_role":         bool(profile and profile.get("job_role", "").strip()),
-        "primary_skills":   bool(profile and profile.get("primary_skills", "").strip()),
-        "bio":              bool(profile and len(profile.get("bio", "").strip()) >= 20),
+        "primary_skills":   bool(profile and str(profile.get("primary_skills", "")).strip()),
+        "bio":              _bio_len >= 20,
     }
     checks["all_ready"] = all(checks.values())
+    checks["_bio_len"]  = _bio_len
     return checks
 
 
@@ -213,17 +142,13 @@ def load_candidate_applications(uid: str) -> list:
     try:
         snapshot = realtime_db.reference(f"candidates/{uid}/applications").get()
         if snapshot:
-            apps = []
-            for k, v in snapshot.items():
-                v["key"] = k
-                # Debugging ke liye check karein
-                if "company_name" not in v:
-                    print(f"DEBUG: Company name missing in application {k}")
-                apps.append(v)
-            return sorted(apps, key=lambda x: x.get("applied_at", ""), reverse=True)
-        return []
-    except Exception as e:
-        st.error(f"Error loading apps: {e}")
+            return sorted(
+                [{"key": k, **v} for k, v in snapshot.items()],
+                key=lambda x: x.get("applied_at", ""),
+                reverse=True
+            )
+        raise ValueError("no data")
+    except Exception:
         return []
 
 
@@ -263,21 +188,11 @@ def check_status_notifications(applications: list, last_seen: str) -> list:
     notable_statuses = {"Shortlisted", "Hired", "Rejected", "Interview Scheduled", "Cancelled"}
     if not last_seen:
         return []
-    
-    # Hum yahan check kar rahe hain ke app mein zaroori info hai ya nahi
-    results = []
-    for app in (applications or []):
-        if app.get("status", "") in notable_statuses and app.get("last_status_change", "") > last_seen:
-            # Agar company ya title missing hai, to object ko update karein
-            if "company_name" not in app or not app.get("job_title"):
-                # Database se dubara fetch karke patch karein
-                uid = st.session_state.user_uid
-                app_key = app.get("key")
-                full_app = realtime_db.reference(f"candidates/{uid}/applications/{app_key}").get()
-                if full_app:
-                    app.update(full_app)
-            results.append(app)
-    return results
+    return [
+        app for app in (applications or [])
+        if app.get("status", "") in notable_statuses
+        and app.get("last_status_change", "") > last_seen
+    ]
 
 
 def submit_application(uid: str, job_data: dict) -> bool:
@@ -306,9 +221,10 @@ def submit_application(uid: str, job_data: dict) -> bool:
             "last_status_change": now,
             "has_report":         False,
         }
-        realtime_db.reference(f"candidates/{uid}/applications").push(app_payload_candidate)
+        cand_push_ref = realtime_db.reference(f"candidates/{uid}/applications").push(app_payload_candidate)
         rec_uid = job_data.get("recruiter_uid", "")
         if rec_uid:
+            app_payload_recruiter["candidate_app_key"] = cand_push_ref.key
             realtime_db.reference(f"recruiters/{rec_uid}/applications").push(app_payload_recruiter)
         return True
     except Exception as e:
@@ -337,34 +253,9 @@ def load_candidate_report(uid: str, app_key: str) -> dict:
         snapshot = realtime_db.reference(f"interview_reports/{uid}/{app_key}").get()
         if snapshot:
             return snapshot
-        raise ValueError("no data")
+        return {}
     except Exception:
-        return _mock_interview_report(uid)
-
-
-def _mock_interview_report(candidate_uid: str) -> dict:
-    import random
-    random.seed(hash(candidate_uid) % 100)
-    timeline = []
-    confidence, stress = 55, 30
-    for i in range(20):
-        confidence = max(10, min(95, confidence + random.randint(-8, 12)))
-        stress     = max(5,  min(80, stress     + random.randint(-6, 9)))
-        timeline.append({
-            "frame": i + 1, "confidence": confidence,
-            "stress": stress, "neutral": max(0, 100 - confidence - stress),
-        })
-    emotions = ["Confident", "Neutral", "Focused", "Nervous", "Enthusiastic"]
-    return {
-        "candidate_uid":      candidate_uid,
-        "avg_speech_clarity": random.randint(68, 95),
-        "speech_tempo_wpm":   random.randint(110, 165),
-        "dominant_emotion":   emotions[hash(candidate_uid) % len(emotions)],
-        "overall_score":      random.randint(62, 94),
-        "emotion_timeline":   timeline,
-        "pdf_report_url":     f"https://storage.googleapis.com/aiemotioninterviewer.firebasestorage.app/reports/{candidate_uid}_report.pdf",
-        "completed_at":       "2026-05-30T16:45:00",
-    }
+        return {}
 
 
 # ===========================
@@ -382,11 +273,12 @@ def _match_badge_html(pct: int, matched: int, total: int) -> str:
 
 
 def _readiness_checklist_html(checks: dict) -> str:
+    _bio_len = checks.get("_bio_len", 0)
     items = [
         ("profile_complete", "Profile complete"),
         ("job_role",         "Target role set"),
         ("primary_skills",   "Primary skills listed"),
-        ("bio",              "Bio written (20+ chars)"),
+        ("bio",              f"Bio written ({_bio_len}/20+ chars)"),
     ]
     rows = ""
     for key, label in items:
@@ -512,94 +404,86 @@ def candidate_profile_tab():
             unsafe_allow_html=True
         )
 
-    # 🛑 YAHAN SE FORM SHURU HOTA HAI TAAKE TYPING PAR SCREEN STUCK NA HO
-    with st.form("candidate_profile_form"):
-        st.markdown('<div class="profile-sec"><span class="ps-num">01</span><span class="ps-title">Personal Info</span><span class="ps-desc">// identity</span></div>', unsafe_allow_html=True)
-        col_a, col_b = st.columns(2, gap="medium")
-        with col_a:
-            full_name = st.text_input("Full name", value=profile.get("full_name", st.session_state.user_name), placeholder="Your full name", key="pf_full_name")
-        with col_b:
-            existing_photo_b64 = profile.get("profile_photo_b64", "")
-            uploaded_photo = st.file_uploader("Profile photo (optional)", type=["jpg", "jpeg", "png", "webp"], key="pf_photo_upload")
-            if uploaded_photo is not None:
-                photo_bytes = uploaded_photo.read()
-                photo_b64_new = base64.b64encode(photo_bytes).decode()
-                photo_mime = uploaded_photo.type
-                profile_photo_b64_final = photo_b64_new
-                photo_data_uri = f"data:{photo_mime};base64,{photo_b64_new}"
-                st.markdown(
-                    f'<div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.75rem;">'
-                    f'<img src="{photo_data_uri}" style="width:52px;height:52px;border-radius:8px;object-fit:cover;border:1px solid var(--border);">'
-                    f'<span style="font-family:\'DM Mono\',monospace;font-size:0.7rem;color:var(--text-muted);">// new photo selected</span>'
-                    f'</div>', unsafe_allow_html=True
-                )
-            elif existing_photo_b64:
-                profile_photo_b64_final = existing_photo_b64
-                existing_uri = existing_photo_b64 if existing_photo_b64.startswith("data:") else f"data:image/jpeg;base64,{existing_photo_b64}"
-                st.markdown(
-                    f'<div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.75rem;">'
-                    f'<img src="{existing_uri}" style="width:52px;height:52px;border-radius:8px;object-fit:cover;border:1px solid var(--border);">'
-                    f'<span style="font-family:\'DM Mono\',monospace;font-size:0.7rem;color:var(--text-muted);">// current photo</span>'
-                    f'</div>', unsafe_allow_html=True
-                )
-            else:
-                profile_photo_b64_final = ""
+    st.markdown('<div class="profile-sec"><span class="ps-num">01</span><span class="ps-title">Personal Info</span><span class="ps-desc">// identity</span></div>', unsafe_allow_html=True)
+    col_a, col_b = st.columns(2, gap="medium")
+    with col_a:
+        full_name = st.text_input("Full name", value=profile.get("full_name", st.session_state.user_name), placeholder="Your full name", key="pf_full_name")
+    with col_b:
+        existing_photo_b64 = profile.get("profile_photo_b64", "")
+        uploaded_photo = st.file_uploader("Profile photo (optional)", type=["jpg", "jpeg", "png", "webp"], key="pf_photo_upload")
+        if uploaded_photo is not None:
+            photo_bytes = uploaded_photo.read()
+            photo_b64_new = base64.b64encode(photo_bytes).decode()
+            photo_mime = uploaded_photo.type
+            profile_photo_b64_final = photo_b64_new
+            photo_data_uri = f"data:{photo_mime};base64,{photo_b64_new}"
+            st.markdown(
+                f'<div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.75rem;">'
+                f'<img src="{photo_data_uri}" style="width:52px;height:52px;border-radius:8px;object-fit:cover;border:1px solid var(--border);">'
+                f'<span style="font-family:\'DM Mono\',monospace;font-size:0.7rem;color:var(--text-muted);">// new photo selected</span>'
+                f'</div>', unsafe_allow_html=True
+            )
+        elif existing_photo_b64:
+            profile_photo_b64_final = existing_photo_b64
+            existing_uri = existing_photo_b64 if existing_photo_b64.startswith("data:") else f"data:image/jpeg;base64,{existing_photo_b64}"
+            st.markdown(
+                f'<div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.75rem;">'
+                f'<img src="{existing_uri}" style="width:52px;height:52px;border-radius:8px;object-fit:cover;border:1px solid var(--border);">'
+                f'<span style="font-family:\'DM Mono\',monospace;font-size:0.7rem;color:var(--text-muted);">// current photo</span>'
+                f'</div>', unsafe_allow_html=True
+            )
+        else:
+            profile_photo_b64_final = ""
 
-        st.markdown('<div class="profile-sec"><span class="ps-num">02</span><span class="ps-title">Professional Background</span><span class="ps-desc">// experience</span></div>', unsafe_allow_html=True)
-        col_c, col_d = st.columns(2, gap="medium")
-        with col_c:
-            job_role = st.text_input("Target role", value=profile.get("job_role", ""), placeholder="e.g. Software Engineer, Data Analyst", key="pf_job_role")
-            exp_opts = ["Fresher", "Mid-Level", "Senior"]
-            exp_def  = profile.get("experience_level", "Fresher")
-            experience_level = st.selectbox("Experience level", exp_opts, index=exp_opts.index(exp_def) if exp_def in exp_opts else 0, key="pf_exp_level")
-        with col_d:
-            years_exp = st.number_input("Years of experience", min_value=0, max_value=50, value=int(profile.get("years_experience", 0)), step=1, key="pf_years_exp")
-            current_company = st.text_input("Current / last company", value=profile.get("current_company", ""), placeholder="e.g. Google, Acme Corp", key="pf_company")
+    st.markdown('<div class="profile-sec"><span class="ps-num">02</span><span class="ps-title">Professional Background</span><span class="ps-desc">// experience</span></div>', unsafe_allow_html=True)
+    col_c, col_d = st.columns(2, gap="medium")
+    with col_c:
+        job_role = st.text_input("Target role", value=profile.get("job_role", ""), placeholder="e.g. Software Engineer, Data Analyst", key="pf_job_role")
+        exp_opts = ["Fresher", "Mid-Level", "Senior"]
+        exp_def  = profile.get("experience_level", "Fresher")
+        experience_level = st.selectbox("Experience level", exp_opts, index=exp_opts.index(exp_def) if exp_def in exp_opts else 0, key="pf_exp_level")
+    with col_d:
+        years_exp = st.number_input("Years of experience", min_value=0, max_value=50, value=int(profile.get("years_experience", 0)), step=1, key="pf_years_exp")
+        current_company = st.text_input("Current / last company", value=profile.get("current_company", ""), placeholder="e.g. Google, Acme Corp", key="pf_company")
 
-        st.markdown('<div class="profile-sec"><span class="ps-num">03</span><span class="ps-title">Skills</span><span class="ps-desc">// tech & soft</span></div>', unsafe_allow_html=True)
-        col_e, col_f = st.columns(2, gap="medium")
-        with col_e:
-            primary_skills = st.text_input("Primary skills", value=profile.get("primary_skills", ""), placeholder="Python, React, SQL, Machine Learning", key="pf_primary_skills")
-            st.caption("separate with commas")
-        with col_f:
-            secondary_skills = st.text_input("Secondary skills (optional)", value=profile.get("secondary_skills", ""), placeholder="Docker, Figma, Excel", key="pf_secondary_skills")
-            st.caption("supporting / bonus skills")
+    st.markdown('<div class="profile-sec"><span class="ps-num">03</span><span class="ps-title">Skills</span><span class="ps-desc">// tech & soft</span></div>', unsafe_allow_html=True)
+    col_e, col_f = st.columns(2, gap="medium")
+    with col_e:
+        _primary_default = [s for s in _skills_str_to_list(profile.get("primary_skills", "")) if s in ALL_SKILLS]
+        primary_skills_list = st.multiselect(
+            "Primary skills", options=ALL_SKILLS, default=_primary_default,
+            placeholder="Select your primary skills", key="pf_primary_skills"
+        )
+        st.caption("core skills you're strongest in")
+    with col_f:
+        _secondary_default = [s for s in _skills_str_to_list(profile.get("secondary_skills", "")) if s in ALL_SKILLS]
+        secondary_skills_list = st.multiselect(
+            "Secondary skills (optional)", options=ALL_SKILLS, default=_secondary_default,
+            placeholder="Select supporting / bonus skills", key="pf_secondary_skills"
+        )
+        st.caption("supporting / bonus skills")
 
-        if primary_skills.strip():
-            pills = "".join(f'<span class="skill-tag">{s.strip()}</span>' for s in primary_skills.split(",") if s.strip())
-            st.markdown(f'<div style="margin-top:6px;">{pills}</div>', unsafe_allow_html=True)
+    primary_skills   = ", ".join(primary_skills_list)
+    secondary_skills = ", ".join(secondary_skills_list)
 
-        st.markdown('<div class="profile-sec"><span class="ps-num">04</span><span class="ps-title">Interview Preferences</span><span class="ps-desc">// customise</span></div>', unsafe_allow_html=True)
-        col_g, col_h, col_i = st.columns(3, gap="medium")
-        with col_g:
-            it_opts = ["Technical", "HR", "Behavioral", "Mixed"]
-            it_def  = profile.get("interview_type", "Mixed")
-            interview_type = st.selectbox("Interview type", it_opts, index=it_opts.index(it_def) if it_def in it_opts else 3, key="pf_interview_type")
-        with col_h:
-            nq_opts = [5, 10, 15]
-            nq_def  = int(profile.get("num_questions", 10))
-            num_questions = st.selectbox("No. of questions", nq_opts, index=nq_opts.index(nq_def) if nq_def in nq_opts else 1, key="pf_num_questions")
-        with col_i:
-            diff_opts = ["Easy", "Medium", "Hard"]
-            diff_def  = profile.get("difficulty_level", "Medium")
-            difficulty_level = st.selectbox("Difficulty", diff_opts, index=diff_opts.index(diff_def) if diff_def in diff_opts else 1, key="pf_difficulty")
+    if primary_skills.strip():
+        pills = "".join(f'<span class="skill-tag">{s.strip()}</span>' for s in primary_skills.split(",") if s.strip())
+        st.markdown(f'<div style="margin-top:6px;">{pills}</div>', unsafe_allow_html=True)
 
-        st.markdown('<div class="profile-sec"><span class="ps-num">05</span><span class="ps-title">About You</span><span class="ps-desc">// bio & links</span></div>', unsafe_allow_html=True)
-        col_j, col_k = st.columns([3, 2], gap="medium")
-        with col_j:
-            bio = st.text_area("Brief bio", value=profile.get("bio", ""), placeholder="2–3 lines about yourself, your goals, what makes you unique...", height=110, key="pf_bio")
-            st.caption(f"{'✓' if len(bio.strip()) >= 20 else '~'}  {len(bio)} chars  //  aim for 50+")
-        with col_k:
-            linkedin_url = st.text_input("LinkedIn URL (optional)", value=profile.get("linkedin_url", ""), placeholder="https://linkedin.com/in/you", key="pf_linkedin")
+    st.markdown('<div class="profile-sec"><span class="ps-num">04</span><span class="ps-title">About You</span><span class="ps-desc">// bio & links</span></div>', unsafe_allow_html=True)
+    col_j, col_k = st.columns([3, 2], gap="medium")
+    with col_j:
+        bio = st.text_area("Brief bio", value=profile.get("bio", ""), placeholder="2–3 lines about yourself, your goals, what makes you unique...", height=110, key="pf_bio")
+        st.caption(f"{'✓' if len(bio.strip()) >= 20 else '~'}  {len(bio)} chars  //  aim for 50+")
+    with col_k:
+        linkedin_url = st.text_input("LinkedIn URL (optional)", value=profile.get("linkedin_url", ""), placeholder="https://linkedin.com/in/you", key="pf_linkedin")
 
-        st.markdown('<div class="form-divider"></div>', unsafe_allow_html=True)
-        save_col, _ = st.columns([1, 3])
-        with save_col:
-            label = "Save Changes →" if is_edit else "Save Profile →"
-            # Button ko form_submit_button se change kardiya hai
-            save_clicked = st.form_submit_button(label, use_container_width=True)
+    st.markdown('<div class="form-divider"></div>', unsafe_allow_html=True)
+    save_col, _ = st.columns([1, 3])
+    with save_col:
+        label = "Save Changes →" if is_edit else "Save Profile →"
+        save_clicked = st.button(label, use_container_width=True, key="save_profile_btn")
 
-    # 🛑 Yahan form submit hone ke baad action hoga
     if save_clicked:
         errors = []
         if not full_name.strip():      errors.append("Full name is required.")
@@ -617,9 +501,6 @@ def candidate_profile_tab():
                 "current_company":   current_company.strip(),
                 "primary_skills":    primary_skills.strip(),
                 "secondary_skills":  secondary_skills.strip(),
-                "interview_type":    interview_type,
-                "num_questions":     int(num_questions),
-                "difficulty_level":  difficulty_level,
                 "bio":               bio.strip(),
                 "linkedin_url":      linkedin_url.strip(),
             }
@@ -639,6 +520,12 @@ def candidate_profile_tab():
 
 def job_search_tab():
     uid = st.session_state.user_uid
+
+    top_l, top_r = st.columns([5, 1])
+    with top_r:
+        if st.button("🔄 Refresh Jobs", key="js_manual_refresh", use_container_width=True):
+            st.rerun()
+
     with st.spinner("Loading jobs..."):
         profile       = load_candidate_profile(uid)
         all_jobs      = load_all_job_postings()
@@ -734,13 +621,15 @@ def job_search_tab():
                     f'{nth_pills}</div>', unsafe_allow_html=True
                 )
 
-            t1, t2, t3 = st.columns(3, gap="small")
+            t1, t2, t3, t4 = st.columns(4, gap="small")
             with t1:
                 st.markdown(f'<div class="report-metric" style="padding:0.9rem 0.8rem;"><div class="rm-value" style="font-size:1.3rem;">{job.get("min_speech_clarity",0)}%</div><div class="rm-label">min speech clarity</div></div>', unsafe_allow_html=True)
             with t2:
                 st.markdown(f'<div class="report-metric" style="padding:0.9rem 0.8rem;"><div class="rm-value" style="font-size:1.3rem;">{job.get("min_score",0)}%</div><div class="rm-label">min overall score</div></div>', unsafe_allow_html=True)
             with t3:
                 st.markdown(f'<div class="report-metric" style="padding:0.9rem 0.8rem;"><div class="rm-value" style="font-size:1rem;">{job.get("target_trait","—")}</div><div class="rm-label">target trait</div></div>', unsafe_allow_html=True)
+            with t4:
+                st.markdown(f'<div class="report-metric" style="padding:0.9rem 0.8rem;"><div class="rm-value" style="font-size:1.3rem;">{job.get("num_questions","—")}</div><div class="rm-label">no. of questions</div></div>', unsafe_allow_html=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
 
@@ -801,30 +690,13 @@ def application_history_tab():
     if notifications:
         st.markdown('<div class="section-heading">🔔 What\'s new</div>', unsafe_allow_html=True)
         for notif in notifications:
-            # DEBUG: Yeh line screen par print karegi ke notif mein kya aa raha hai
-            # st.write(notif) 
-            
-            # AGAR company_name notif mein nahi hai, to hum usay manually fetch karenge
-            company = notif.get("company_name")
-            if not company or company == "—":
-                # Hum us application key ka use karke direct DB se fetch karenge
-                app_key = notif.get("key")
-                if app_key:
-                    db_data = realtime_db.reference(f"candidates/{uid}/applications/{app_key}").get()
-                    if db_data:
-                        company = db_data.get("company_name")
-            
-            job_title = notif.get("job_title") or "Interview"
-            display_comp = f" at {company}" if company and company != "—" else ""
-            
             status    = notif.get("status", "")
             notif_cls = {"Shortlisted": "notif-shortlisted", "Hired": "notif-hired", "Rejected": "notif-rejected",
                          "Interview Scheduled": "notif-hired", "Cancelled": "notif-rejected"}.get(status, "notif-shortlisted")
             icon = {"Shortlisted": "⭐", "Hired": "🎉", "Rejected": "📭", "Interview Scheduled": "📅", "Cancelled": "⏰"}.get(status, "🔔")
-            
             st.markdown(
                 f'<div class="notif-banner {notif_cls}"><span class="nb-icon">{icon}</span>'
-                f'<div><div class="nb-title">Your application for <strong>{job_title}</strong>{display_comp} is now: {status}</div>'
+                f'<div><div class="nb-title">Your application for <strong>{notif.get("job_title","—")}</strong> at {notif.get("company_name","—")} is now: {status}</div>'
                 f'<div class="nb-sub">// updated {notif.get("last_status_change","")[:10]}</div></div></div>',
                 unsafe_allow_html=True
             )
@@ -854,10 +726,16 @@ def application_history_tab():
 
     st.markdown('<div class="section-heading">All applications</div>', unsafe_allow_html=True)
 
+    _jobs_by_id = {j.get("job_id", ""): j for j in load_all_job_postings() if j.get("job_id")}
+
     for idx, app in enumerate(apps):
         status        = app.get("status", "Applied")
-        job_title     = app.get("job_title", "—")
-        company       = app.get("company_name", "—")
+        _fallback_job = _jobs_by_id.get(app.get("job_id", ""), {})
+        job_title     = app.get("job_title") or _fallback_job.get("job_title", "")
+        company       = app.get("company_name") or _fallback_job.get("company_name", "")
+        _is_broken    = not job_title and not company
+        job_title     = job_title or "⚠️ Incomplete application record"
+        company       = company or "no job data found — this record can be safely removed"
         applied_str   = app.get("applied_at", "")[:10] if app.get("applied_at") else "—"
         app_key       = app.get("key", "")
         recruiter_uid = app.get("recruiter_uid", "")
@@ -878,6 +756,17 @@ def application_history_tab():
           {_pipeline_html(status)}
         </div>
         """, unsafe_allow_html=True)
+
+        if _is_broken and app_key:
+            if st.button("🗑️ Remove this broken record", key=f"remove_broken_{app_key}_{idx}", use_container_width=True):
+                try:
+                    realtime_db.reference(f"candidates/{uid}/applications/{app_key}").delete()
+                    st.success("✅ Removed. Refreshing...")
+                    time.sleep(0.4)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Could not remove record: {e}")
+            continue
 
         if status == "Interview Scheduled":
             deadline = app.get("interview_deadline", "")
@@ -922,16 +811,19 @@ def application_history_tab():
             if "start_interview" in actions:
                 with btn_cols[col_ptr]:
                     if st.button("🎤 Start Interview", key=f"start_int_{app_key}_{idx}", use_container_width=True):
+                    
                         st.session_state.job_interview_context = {
-                            "job_id":             app.get("job_id", ""),
-                            "job_title":          job_title,
-                            "company_name":       company,
-                            "job_description":    app.get("job_description", ""),
-                            "core_skills":        app.get("core_skills", []),
-                            "min_speech_clarity": app.get("min_speech_clarity", 60),
-                            "min_score":          app.get("min_score", 60),
-                            "app_key":            app_key,
-                        }
+                        "job_id":             app.get("job_id", ""),
+                        "job_title":          job_title,
+                        "company_name":       company,
+                        "job_description":    app.get("job_description", ""),
+                        "core_skills":        app.get("core_skills", []),
+                        "min_speech_clarity": app.get("min_speech_clarity", 60),
+                        "min_score":          app.get("min_score", 60),
+                        "app_key":            app_key,
+                        "recruiter_uid":      recruiter_uid,
+                    }
+                        
                         st.success(f"✅ Interview context loaded for {job_title}. Launching...")
                         time.sleep(0.6)
                         from app import navigate_to
@@ -1042,12 +934,9 @@ def _candidate_overview_tab():
     if newly_cancelled:
         st.markdown('<div class="section-heading">⏰ Interview Deadlines Passed</div>', unsafe_allow_html=True)
         for nc in newly_cancelled:
-            job_title = nc.get("job_title") or "Interview"
-            company = nc.get("company_name")
-            display_comp = f" at {company}" if company and company.strip() and company != "—" else ""
             st.markdown(
                 f'<div class="notif-banner notif-rejected"><span class="nb-icon">⏰</span>'
-                f'<div><div class="nb-title">Interview session for <strong>{job_title}</strong>{display_comp} was cancelled — deadline passed</div>'
+                f'<div><div class="nb-title">Interview session for <strong>{nc.get("job_title","—")}</strong> at {nc.get("company_name","—")} was cancelled — deadline passed</div>'
                 f'<div class="nb-sub">// you did not complete the AI interview within 48 hours</div></div></div>',
                 unsafe_allow_html=True
             )
@@ -1056,29 +945,13 @@ def _candidate_overview_tab():
     if notifications:
         st.markdown('<div class="section-heading">🔔 Updates since last login</div>', unsafe_allow_html=True)
         for notif in notifications:
-            # FORCE FETCH: Agar notif mein company nahi, to direct DB se check karein
-            job_title = notif.get("job_title") or "Interview"
-            company = notif.get("company_name")
-            
-            # Agar company nahi mil rahi, to job_id ke zariye database se verify karein
-            if not company or company == "—":
-                job_id = notif.get("job_id")
-                if job_id:
-                    # Recruiter ke postings se company name nikalne ki koshish
-                    job_data = realtime_db.reference(f"recruiters/{notif.get('recruiter_uid')}/job_postings/{job_id}").get()
-                    if job_data:
-                        company = job_data.get("company_name")
-
-            display_comp = f" at {company}" if company and company != "—" else ""
-            
             status    = notif.get("status", "")
             notif_cls = {"Shortlisted": "notif-shortlisted", "Hired": "notif-hired", "Rejected": "notif-rejected",
                          "Interview Scheduled": "notif-hired", "Cancelled": "notif-rejected"}.get(status, "notif-shortlisted")
             icon = {"Shortlisted": "⭐", "Hired": "🎉", "Rejected": "📭", "Interview Scheduled": "📅", "Cancelled": "⏰"}.get(status, "🔔")
-            
             st.markdown(
                 f'<div class="notif-banner {notif_cls}"><span class="nb-icon">{icon}</span>'
-                f'<div><div class="nb-title"><strong>{job_title}</strong>{display_comp} — status changed to: {status}</div>'
+                f'<div><div class="nb-title"><strong>{notif.get("job_title","—")}</strong> at {notif.get("company_name","—")} — status changed to: {status}</div>'
                 f'<div class="nb-sub">// updated {notif.get("last_status_change","")[:10]}</div></div></div>',
                 unsafe_allow_html=True
             )
@@ -1117,19 +990,6 @@ def _candidate_overview_tab():
                 st.rerun()
         st.markdown("<br>", unsafe_allow_html=True)
 
-    st.markdown('<div class="section-heading">Quick actions</div>', unsafe_allow_html=True)
-    qa1, qa2, qa3 = st.columns(3, gap="medium")
-    with qa1:
-        st.markdown("""<div class="qa-card"><span class="qa-icon">🎤</span><div><div class="qa-title">New Interview</div><div class="qa-sub">// start a session</div></div></div>""", unsafe_allow_html=True)
-        if st.button("Start →", key="dash_interview", use_container_width=True):
-            navigate_to("interview")
-    with qa2:
-        st.markdown("""<div class="qa-card"><span class="qa-icon">🔍</span><div><div class="qa-title">Browse Jobs</div><div class="qa-sub">// find openings</div></div></div>""", unsafe_allow_html=True)
-        st.button("Browse →", key="dash_jobs", use_container_width=True)
-    with qa3:
-        st.markdown("""<div class="qa-card"><span class="qa-icon">📋</span><div><div class="qa-title">My Applications</div><div class="qa-sub">// track progress</div></div></div>""", unsafe_allow_html=True)
-        st.button("View →", key="dash_myapps", use_container_width=True)
-
     if st.session_state.profile_setup:
         st.markdown('<div class="section-heading">Profile summary</div>', unsafe_allow_html=True)
         profile = load_candidate_profile(uid)
@@ -1149,14 +1009,15 @@ def _candidate_overview_tab():
                 (profile.get("job_role", "—"),          "target role"),
                 (str(profile.get("years_experience",0)), "yrs experience"),
                 (profile.get("experience_level", "—"),   "level"),
-                (profile.get("interview_type", "—"),     "interview type"),
+                (profile.get("current_company", "—") or "—", "company"),
             ]):
                 with col:
                     st.markdown(f'<div class="stat-card"><div class="stat-num" style="font-size:1rem;">{n}</div><div class="stat-label">{l}</div></div>', unsafe_allow_html=True)
             ps = profile.get("primary_skills", "")
             if ps:
                 st.markdown("<br>", unsafe_allow_html=True)
-                pills = "".join(f'<span class="skill-tag">{s.strip()}</span>' for s in ps.split(",") if s.strip())
+                ps_parts = ps if isinstance(ps, list) else ps.split(",")
+                pills = "".join(f'<span class="skill-tag">{str(s).strip()}</span>' for s in ps_parts if str(s).strip())
                 st.markdown(
                     f'<div class="ml-card" style="padding:1rem 1.4rem;">'
                     f'<div style="font-family:\'DM Mono\',monospace;font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:0.6rem;">// primary skills</div>'

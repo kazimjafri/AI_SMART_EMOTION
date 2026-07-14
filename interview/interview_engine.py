@@ -8,8 +8,12 @@
 import os
 import time
 import streamlit as st
+import json
+from dotenv import load_dotenv
 from datetime import datetime
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+
+load_dotenv()
 
 # Local modules
 from interview.emotion_tracker import (
@@ -119,27 +123,26 @@ def _camera_ready(webrtc_ctx) -> bool:
 # QUESTION GENERATION  (Gemini / fallback)
 # ───────────────────────────────────────────
 
+# ───────────────────────────────────────────
+# QUESTION GENERATION  (Updated to use recruiter-defined num_questions)
+# ───────────────────────────────────────────
+
 def _generate_questions(profile: dict, job_ctx: dict) -> list:
     """
     Generate interview questions tailored to candidate profile + job context.
-    Uses AI API; falls back to curated question bank.
-    Returns list of {question, category, expected_keywords}
+    Uses recruiter-defined 'num_questions' from job_ctx.
     """
-    job_title    = job_ctx.get("job_title",       "General Role")
-    company      = job_ctx.get("company_name",    "")
-    job_desc     = job_ctx.get("job_description", "")
-    core_skills  = job_ctx.get("core_skills",     [])
-    int_type     = job_ctx.get("interview_type",  "Mixed")
-    years_exp    = profile.get("years_experience", 1)
-    candidate_skills = profile.get("primary_skills", "")
 
-    # Number of questions based on experience
-    if years_exp <= 1:
-        num_q = 5
-    elif years_exp <= 3:
-        num_q = 7
-    else:
-        num_q = 10
+    job_title    = job_ctx.get("job_title", "General Role")
+    company      = job_ctx.get("company_name", "")
+    num_q        = job_ctx.get("num_questions", 10) # if no. of questions not specified, default to 10
+    job_desc     = job_ctx.get("job_description", "")
+    core_skills  = job_ctx.get("core_skills", [])
+    int_type     = job_ctx.get("interview_type", "Mixed")
+    years_exp    = profile.get("years_experience", 1)
+    exp_level    = job_ctx.get("experience_level", "Mid")
+    candidate_skills = profile.get("primary_skills", "")
+    
 
     prompt = f"""You are an expert technical interviewer. Generate exactly {num_q} interview questions.
 
@@ -148,6 +151,7 @@ Company: {company}
 Interview type: {int_type}
 Candidate experience: {years_exp} years
 Candidate skills: {candidate_skills}
+Candidate Experience Level: {exp_level}
 Core skills required: {', '.join(core_skills) if core_skills else 'General'}
 Job description: {job_desc[:500] if job_desc else 'N/A'}
 
@@ -169,7 +173,7 @@ Respond ONLY with a valid JSON array (no markdown):
     try:
         api_key = os.environ.get("GEMINI_API_KEY", "")    
         if not api_key:
-            raise ValueError("No key")
+            raise ValueError("No API Key found in .env")
 
         import google.generativeai as genai_sdk
         import json
@@ -178,6 +182,7 @@ Respond ONLY with a valid JSON array (no markdown):
         response = model.generate_content(prompt)
         raw      = response.text.strip()
 
+        # Clean potential markdown if Gemini ignores instructions
         if raw.startswith("```"):
             parts = raw.split("```")
             raw   = parts[1] if len(parts) > 1 else raw
@@ -186,10 +191,12 @@ Respond ONLY with a valid JSON array (no markdown):
 
         questions = json.loads(raw.strip())
         if isinstance(questions, list) and questions:
+            # Recruiter ke number ke mutabiq slice
             return questions[:num_q]
         raise ValueError("Empty result")
 
     except Exception:
+        # Fallback mein bhi num_q use karein
         return _fallback_questions(job_title, company, core_skills, int_type, num_q)
 
 
