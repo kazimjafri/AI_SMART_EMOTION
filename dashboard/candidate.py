@@ -10,6 +10,9 @@ import time
 from datetime import datetime
 from firebase_admin import db as realtime_db
 
+from models.fake_job_detector import predict_fake_job
+from utils.loading_ui import themed_loader
+
 
 # ===========================
 # SKILLS OPTIONS
@@ -504,7 +507,7 @@ def candidate_profile_tab():
                 "bio":               bio.strip(),
                 "linkedin_url":      linkedin_url.strip(),
             }
-            with st.spinner("Saving..."):
+            with themed_loader("Saving..."):
                 saved = save_candidate_profile(uid, payload)
             if saved:
                 st.session_state.profile_setup = True
@@ -648,7 +651,7 @@ def job_search_tab():
                 with apply_col:
                     if readiness["all_ready"]:
                         if st.button(f"Apply Now →", key=f"apply_{job_id}_{idx}", use_container_width=True):
-                            with st.spinner("Submitting application..."):
+                            with themed_loader("Submitting application..."):
                                 ok = submit_application(uid, job)
                             if ok:
                                 st.success(f"✅ Applied to {job_title} at {company}!")
@@ -884,6 +887,90 @@ def application_history_tab():
 
 
 # ===========================
+# FAKE JOB VERIFIER TAB
+# ===========================
+
+def fake_job_verifier_tab():
+    """Lets the candidate paste a job link + description and check
+    whether it looks like a fake/scam posting, using the trained
+    Logistic Regression model.
+
+    Wrapped in st.form so that typing/pasting into the fields does
+    NOT trigger a script rerun (and therefore no computation/freeze)
+    — the check only runs when "Check Authenticity" is clicked.
+    """
+
+    st.markdown('<div class="section-heading">🔍 Verify Job Posting</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<p style="color:var(--text-muted);font-family:\'DM Mono\',monospace;font-size:0.8rem;">'
+        "// paste a job link and its description before applying — we'll flag it if it looks fake"
+        "</p>",
+        unsafe_allow_html=True,
+    )
+
+    with st.form("fake_job_verify_form"):
+        job_url = st.text_input(
+            "Job posting link (URL)",
+            placeholder="https://...",
+            key="fakejob_url_input",
+        )
+        job_desc = st.text_area(
+            "Job description (paste the full text)",
+            height=180,
+            key="fakejob_desc_input",
+            placeholder="Paste the complete job description here...",
+        )
+        check_clicked = st.form_submit_button("🕵️  Check Authenticity", use_container_width=True)
+
+    if check_clicked:
+        if not job_desc.strip():
+            st.warning("⚠️ Please paste the job description first.")
+        else:
+            with themed_loader("Analyzing job posting..."):
+                result = predict_fake_job(job_url, job_desc)
+
+            if not result["model_loaded"]:
+                st.error(
+                    "⚠️ Detection model files were not found. "
+                    "Make sure fake_job_model.pkl, fake_job_vectorizer.pkl, and "
+                    "fake_job_scaler.pkl are inside the models/ folder."
+                )
+            elif result["label"] == "Fake":
+                st.markdown(f"""
+                <div class="ml-card" style="border-left:4px solid #ef4444;">
+                    <div style="font-family:'Sora',sans-serif;font-weight:700;font-size:1.1rem;color:#ef4444;">
+                        🚩 Likely FAKE
+                    </div>
+                    <div style="color:var(--text-muted);margin-top:4px;">
+                        Confidence: {result['confidence']}%
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="ml-card" style="border-left:4px solid #22c55e;">
+                    <div style="font-family:'Sora',sans-serif;font-weight:700;font-size:1.1rem;color:#22c55e;">
+                        ✅ Likely REAL
+                    </div>
+                    <div style="color:var(--text-muted);margin-top:4px;">
+                        Confidence: {result['confidence']}%
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            if result["url_flags"]:
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("**⚠️ Additional flags from the link:**")
+                for flag in result["url_flags"]:
+                    st.markdown(f"- {flag}")
+
+            st.caption(
+                "This is an AI prediction based on patterns in known real/fake job postings — "
+                "always verify independently before sharing personal or financial information."
+            )
+
+
+# ===========================
 # CANDIDATE DASHBOARD (main entry)
 # ===========================
 
@@ -899,12 +986,12 @@ def render_candidate_dashboard():
 
     if st.session_state.get("goto_profile_tab", False):
         st.session_state.goto_profile_tab = False
-        tab_profile, tab_overview, tab_jobs, tab_apphistory = st.tabs([
-            "  Profile  ", "  Overview  ", "  Job Search  ", "  Application History  ",
+        tab_profile, tab_overview, tab_jobs, tab_verifyjob, tab_apphistory = st.tabs([
+            "  Profile  ", "  Overview  ", "  Job Search  ", "  Verify Job  ", "  Application History  ",
         ])
     else:
-        tab_overview, tab_jobs, tab_apphistory, tab_profile = st.tabs([
-            "  Overview  ", "  Job Search  ", "  Application History  ", "  Profile  ",
+        tab_overview, tab_jobs, tab_verifyjob, tab_apphistory, tab_profile = st.tabs([
+            "  Overview  ", "  Job Search  ", "  Verify Job  ", "  Application History  ", "  Profile  ",
         ])
 
     with tab_overview:
@@ -912,6 +999,9 @@ def render_candidate_dashboard():
 
     with tab_jobs:
         job_search_tab()
+
+    with tab_verifyjob:
+        fake_job_verifier_tab()
 
     with tab_apphistory:
         application_history_tab()

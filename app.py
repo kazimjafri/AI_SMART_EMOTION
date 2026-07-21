@@ -22,6 +22,7 @@ from datetime import datetime
 from interview.interview_engine import render_interview_page
 from dashboard.candidate import render_candidate_dashboard
 from dashboard.recruiter import render_recruiter_dashboard
+from utils.loading_ui import show_splash_screen, show_page_transition, themed_loader
 
 # Google Cloud Firestore
 try:
@@ -838,11 +839,11 @@ def auth_page():
                 elif not login_password:
                     st.error("❌ Please enter your password.")
                 else:
-                    with st.spinner("Authenticating..."):
+                    with themed_loader("Authenticating..."):
                         success = firebase_login(login_email.strip(), login_password)
                     if success:
                         st.success(f"✅ Welcome back, {st.session_state.user_name}!")
-                        time.sleep(0.8)
+                        show_page_transition("Loading your dashboard...")
                         navigate_to("dashboard")
 
         with tab_register:
@@ -867,7 +868,7 @@ def auth_page():
                 elif reg_pass != reg_confirm:
                     st.error("❌ Passwords do not match.")
                 else:
-                    with st.spinner("Creating your account..."):
+                    with themed_loader("Creating your account..."):
                         success = firebase_register(reg_name.strip(), reg_email.strip(), reg_pass, reg_role)
                     if success:
                         st.success("🎉 Account created! Please log in.")
@@ -1044,6 +1045,7 @@ def interview_page():
 def main():
     restore_session_from_query_params()
     sidebar()
+    show_splash_screen()   # shows once per browser session, right after theme is loaded
     page = st.session_state.current_page
 
     if page == "home":

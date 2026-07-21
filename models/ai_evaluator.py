@@ -20,7 +20,7 @@ def get_gemini_model():
             return None
             
     genai_sdk.configure(api_key=api_key)
-    return genai_sdk.GenerativeModel("gemini-1.5-flash")
+    return genai_sdk.GenerativeModel("gemini-2.5-flash-lite")
 
 
 def generate_interview_questions(ctx: dict, profile: dict, num_q: int) -> list:

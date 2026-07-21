@@ -24,7 +24,7 @@ pyaudio==0.2.11
 # =========================
 # GOOGLE GEMINI (COMPATIBLE)
 # =========================
-google-generativeai==0.3.2
+google-generativeai==0.8.6
 
 # =========================
 # FIREBASE
@@ -42,3 +42,7 @@ streamlit-authenticator
 # REPORT GENERATION
 # =========================
 reportlab
+
+joblib
+scikit-learn==1.7.2
+scipy

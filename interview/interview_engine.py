@@ -178,7 +178,7 @@ Respond ONLY with a valid JSON array (no markdown):
         import google.generativeai as genai_sdk
         import json
         genai_sdk.configure(api_key=api_key)
-        model    = genai_sdk.GenerativeModel("gemini-1.5-flash")
+        model    = genai_sdk.GenerativeModel("gemini-2.5-flash-lite")
         response = model.generate_content(prompt)
         raw      = response.text.strip()
 

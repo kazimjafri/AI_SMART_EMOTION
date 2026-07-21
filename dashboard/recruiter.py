@@ -8,6 +8,8 @@ import time
 from datetime import datetime, timedelta
 from firebase_admin import db as realtime_db
 
+from utils.loading_ui import themed_loader
+
 # ===========================
 # RECRUITER FIREBASE HELPERS
 # ===========================
@@ -271,7 +273,7 @@ def recruiter_profile_tab():
                 "linkedin_company": linkedin_company.strip(),
                 "bio":              bio.strip(),
             }
-            with st.spinner("Saving..."):
+            with themed_loader("Saving..."):
                 saved = save_recruiter_profile(uid, payload)
             if saved:
                 st.session_state.recruiter_profile_setup = True
@@ -409,7 +411,7 @@ def post_requirements_tab():
                 "num_questions":      num_questions,
                 "job_description":    job_description.strip(),
             }
-            with st.spinner("Posting to Firebase..."):
+            with themed_loader("Posting to Firebase..."):
                 ok = post_job_requirement(uid, payload)
             if ok:
                 st.success("✅ Job posted! Candidates can now see and apply for this role.")

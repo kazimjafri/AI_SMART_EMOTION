@@ -100,7 +100,7 @@ def get_gemini_model():
     if not api_key:
         return None
     genai_sdk.configure(api_key=api_key)
-    return genai_sdk.GenerativeModel("gemini-1.5-flash")
+    return genai_sdk.GenerativeModel("gemini-2.5-flash-lite")
 
 def evaluate_answer(
     question: str,
