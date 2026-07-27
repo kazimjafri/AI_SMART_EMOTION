@@ -96,13 +96,16 @@ def update_application_status(
     recruiter_uid: str,
     recruiter_app_key: str,
     new_status: str,
-    interview_deadline: str = ""
+    interview_deadline: str = "",
+    status_message: str = "",
 ) -> bool:
     try:
         now = datetime.utcnow().isoformat()
         candidate_update = {"status": new_status, "last_status_change": now}
         if interview_deadline:
             candidate_update["interview_deadline"] = interview_deadline
+        if status_message:
+            candidate_update["status_message"] = status_message
         recruiter_update = {"status": new_status, "last_status_change": now}
 
         realtime_db.reference(f"candidates/{candidate_uid}/applications/{app_key}").update(candidate_update)
@@ -112,6 +115,16 @@ def update_application_status(
     except Exception as e:
         st.error(f"❌ Failed to update status: {str(e)}")
         return False
+
+
+def _fetch_min_score(candidate_uid: str, cand_app_key: str, fallback: int = 60) -> int:
+    try:
+        cand_app = realtime_db.reference(f"candidates/{candidate_uid}/applications/{cand_app_key}").get()
+        if cand_app:
+            return int(cand_app.get("min_score", fallback) or fallback)
+    except Exception:
+        pass
+    return fallback
 
 
 # ===========================
@@ -152,7 +165,7 @@ def recruiter_overview_tab(apps: list, postings: list):
     total_apps      = len(apps)
     active_postings = sum(1 for p in postings if p.get("status", "active") == "active")
     pending_review  = sum(1 for a in apps if a.get("status") in {"Applied", "Pending Review"})
-    interviews_done = sum(1 for a in apps if a.get("status") in {"Interview Completed", "Report Generated", "Shortlisted", "Hired"})
+    interviews_done = sum(1 for a in apps if a.get("status") in {"Interview Completed", "Report Generated", "Hired", "Rejected"})
 
     st.markdown('<div class="section-heading">Live snapshot</div>', unsafe_allow_html=True)
     s1, s2, s3, s4 = st.columns(4, gap="small")
@@ -160,7 +173,7 @@ def recruiter_overview_tab(apps: list, postings: list):
         (active_postings, "+", "Active job postings"),
         (total_apps,      "",  "Total applications"),
         (pending_review,  "",  "Awaiting your review"),
-        (interviews_done, "",  "AI screenings done"),
+        (interviews_done, "",  "Interviews done"),
     ]):
         with col:
             st.markdown(f'<div class="stat-card"><div class="stat-num">{n}<span>{sfx}</span></div><div class="stat-label">{lbl}</div></div>', unsafe_allow_html=True)
@@ -338,8 +351,11 @@ def post_requirements_tab():
             
             # Project Management & Soft Skills
             "Git", "REST APIs", "GraphQL", "Microservices", "Agile / Scrum", "Project Management", "Leadership", 
-            "Communication", "Technical Writing", "UX Design", "Figma", "SEO", "CRM (Salesforce/HubSpot)"
+            "Communication", "Technical Writing", "UX Design", "Figma", "SEO", "CRM (Salesforce/HubSpot)",
+            "Selenium", "QA Testing", "Postman", "JMeter", "CI/CD", "Wireframing", "Prototyping", "Adobe Creative Suite",
+            "Onboarding", "Employee Relations", "HRIS software", "Talent Acquisition"
         ]
+
 
         st.markdown('<div class="profile-sec"><span class="ps-num">02</span><span class="ps-title">Technical Requirements</span><span class="ps-desc">// core skills</span></div>', unsafe_allow_html=True)
         core_skills = st.multiselect("Core technical skills required", options=ALL_SKILLS, default=["Python", "SQL"], key="pr_core_skills")
@@ -353,10 +369,10 @@ def post_requirements_tab():
         col_e, col_f = st.columns(2, gap="medium")
         with col_e:
             min_speech_clarity = st.slider("Minimum speech clarity threshold (%)", 0, 100, 70, 5, key="pr_speech_clarity")
-            st.caption(f"// candidates below {min_speech_clarity}% clarity will be flagged")
+            # st.caption(f"// candidates below {min_speech_clarity}% clarity will be flagged")
         with col_f:
             min_score = st.slider("Minimum overall AI score (%)", 0, 100, 60, 5, key="pr_min_score")
-            st.caption(f"// auto-reject below {min_score}% overall score")
+            # st.caption(f"// auto-reject below {min_score}% overall score")
 
         # Interview Length (Section 04 - Separate Row/Col)
         st.markdown('<div class="profile-sec"><span class="ps-num">04</span><span class="ps-title">Interview Questions</span><span class="ps-desc">// question count</span></div>', unsafe_allow_html=True)
@@ -464,15 +480,15 @@ def incoming_applications_tab():
     need_review = sum(1 for a in apps if a.get("status") in {"Applied", "Pending Review"})
     scheduled   = sum(1 for a in apps if a.get("status") == "Interview Scheduled")
     completed   = sum(1 for a in apps if a.get("status") in {"Interview Completed", "Report Generated"})
-    shortlisted = sum(1 for a in apps if a.get("status") == "Shortlisted")
+    pending_hire = sum(1 for a in apps if a.get("status") == "Report Generated")
 
     s1, s2, s3, s4, s5 = st.columns(5, gap="small")
     for col, (n, lbl) in zip([s1, s2, s3, s4, s5], [
         (total,       "total"),
         (need_review, "need review"),
         (scheduled,   "interview set"),
-        (completed,   "AI done"),
-        (shortlisted, "shortlisted"),
+        (completed,   "interview done"),
+        (pending_hire, "awaiting decision"),
     ]):
         with col:
             st.markdown(f'<div class="stat-card"><div class="stat-num">{n}</div><div class="stat-label">{lbl}</div></div>', unsafe_allow_html=True)
@@ -486,7 +502,7 @@ def incoming_applications_tab():
         with f2:
             status_filter = st.selectbox("Filter by status",
                 ["All", "Applied", "Pending Review", "Interview Scheduled", "Interview Completed",
-                 "Report Generated", "Shortlisted", "Hired", "Rejected", "Cancelled"],
+                 "Report Generated", "Hired", "Rejected", "Cancelled"],
                 key="rec_app_status_filter"
             )
         with f3:
@@ -568,7 +584,7 @@ def incoming_applications_tab():
         </div>
         """, unsafe_allow_html=True)
 
-        show_report = has_report or status in {"Interview Completed", "Report Generated", "Shortlisted", "Hired"}
+        show_report = has_report or status in {"Interview Completed", "Report Generated", "Hired"}
         btn_cols = st.columns([1, 1, 1, 3], gap="small")
 
         if status in {"Applied", "Pending Review"}:
@@ -579,13 +595,44 @@ def incoming_applications_tab():
                 if st.button("✕ Reject", key=f"reject_{app_key}_{idx}", use_container_width=True):
                     st.session_state[f"action_{app_key}"] = "reject"
 
-        if show_report:
-            with btn_cols[2]:
-                if st.button("📊 View Report", key=f"view_rep_{app_key}_{idx}", use_container_width=True):
-                    st.session_state.selected_candidate_uid  = cand_uid
-                    st.session_state.selected_candidate_name = cand_name
-                    st.session_state._rec_goto_reports = True
-                    st.rerun()
+        if status == "Report Generated" and has_report:
+            overall_score = int(app.get("overall_score", 0) or 0)
+            min_score = int(app.get("min_score", 0) or 0) or _fetch_min_score(cand_uid, cand_app_key)
+            dominant_emotion = app.get("dominant_emotion", "—")
+            passed = overall_score >= min_score
+            score_color = "#059669" if passed else "#dc2626"
+            threshold_txt = f"meets {min_score}% minimum" if passed else f"below {min_score}% minimum"
+
+            st.markdown(
+                f'<div style="background:var(--bg-card-2);border:1px solid var(--border);border-radius:10px;'
+                f'padding:0.75rem 1rem;margin:0.4rem 0 0.6rem;display:flex;align-items:center;'
+                f'justify-content:space-between;flex-wrap:wrap;gap:0.75rem;">'
+                f'<div><div style="font-family:\'DM Mono\',monospace;font-size:0.65rem;color:var(--text-muted);'
+                f'text-transform:uppercase;letter-spacing:1px;">// interview result</div>'
+                f'<div style="font-family:\'Sora\',sans-serif;font-size:1.1rem;font-weight:700;color:{score_color};">'
+                f'{overall_score}/100 &nbsp;·&nbsp; {threshold_txt}</div>'
+                f'<div style="font-family:\'DM Mono\',monospace;font-size:0.68rem;color:var(--text-muted);margin-top:3px;">'
+                f'// dominant emotion: {dominant_emotion}</div></div>'
+                f'<div style="font-family:\'DM Mono\',monospace;font-size:0.68rem;color:var(--text-muted);">'
+                f'// your decision required</div></div>',
+                unsafe_allow_html=True,
+            )
+
+            dec_cols = st.columns([1, 1, 3], gap="small")
+            with dec_cols[0]:
+                if st.button("✅ Hire", key=f"hire_{app_key}_{idx}", use_container_width=True):
+                    st.session_state[f"action_{app_key}"] = "hire"
+            with dec_cols[1]:
+                if st.button("✕ Reject", key=f"reject_decision_{app_key}_{idx}", use_container_width=True):
+                    st.session_state[f"action_{app_key}"] = "reject_decision"
+
+        if status == "Rejected" and app.get("auto_rejected"):
+            st.markdown(
+                f'<div style="font-family:\'DM Mono\',monospace;font-size:0.68rem;color:var(--text-muted);'
+                f'padding:0.4rem 0 0.6rem;letter-spacing:0.3px;">'
+                f'// auto-rejected — score below minimum threshold</div>',
+                unsafe_allow_html=True,
+            )
 
         if st.session_state.get(f"action_{app_key}") == "accept":
             st.markdown(
@@ -641,6 +688,65 @@ def incoming_applications_tab():
                     st.session_state.pop(f"action_{app_key}", None)
                     st.rerun()
 
+        if st.session_state.get(f"action_{app_key}") == "hire":
+            st.markdown(
+                f'<div class="confirm-card" style="border-color:rgba(5,150,105,0.25);">'
+                f'<div class="cc-q">Hire <strong>{cand_name}</strong> for <strong>{job_title}</strong>?<br>'
+                f'<span style="font-family:\'DM Mono\',monospace;font-size:0.7rem;color:var(--text-muted);">'
+                f'// candidate will be notified on their dashboard</span></div></div>',
+                unsafe_allow_html=True,
+            )
+            ch1, ch2, _ = st.columns([1, 1, 4])
+            with ch1:
+                if st.button("Yes, Hire", key=f"yes_hire_{app_key}_{idx}", use_container_width=True):
+                    from reports.post_interview import hire_message
+                    company = app.get("company_name", "")
+                    with st.spinner("Updating..."):
+                        ok = update_application_status(
+                            candidate_uid=cand_uid, app_key=cand_app_key,
+                            recruiter_uid=uid, recruiter_app_key=app_key,
+                            new_status="Hired",
+                            status_message=hire_message(job_title, company),
+                        )
+                    if ok:
+                        st.session_state.pop(f"action_{app_key}", None)
+                        st.success(f"✅ {cand_name} has been hired for {job_title}!")
+                        time.sleep(0.6)
+                        st.rerun()
+            with ch2:
+                if st.button("Cancel", key=f"cancel_hire_{app_key}_{idx}", use_container_width=True):
+                    st.session_state.pop(f"action_{app_key}", None)
+                    st.rerun()
+
+        if st.session_state.get(f"action_{app_key}") == "reject_decision":
+            st.markdown(
+                f'<div class="confirm-card" style="border-color:rgba(239,68,68,0.25);">'
+                f'<div class="cc-q" style="color:#dc2626;">Reject <strong>{cand_name}</strong> for <strong>{job_title}</strong>?<br>'
+                f'<span style="font-family:\'DM Mono\',monospace;font-size:0.7rem;color:var(--text-muted);">'
+                f'// candidate will see a rejection message on their dashboard</span></div></div>',
+                unsafe_allow_html=True,
+            )
+            crd1, crd2, _ = st.columns([1, 1, 4])
+            with crd1:
+                if st.button("Yes, Reject", key=f"yes_reject_decision_{app_key}_{idx}", use_container_width=True):
+                    from reports.post_interview import manual_reject_message
+                    with st.spinner("Updating..."):
+                        ok = update_application_status(
+                            candidate_uid=cand_uid, app_key=cand_app_key,
+                            recruiter_uid=uid, recruiter_app_key=app_key,
+                            new_status="Rejected",
+                            status_message=manual_reject_message(job_title),
+                        )
+                    if ok:
+                        st.session_state.pop(f"action_{app_key}", None)
+                        st.warning(f"❌ {cand_name}'s application for {job_title} has been rejected.")
+                        time.sleep(0.6)
+                        st.rerun()
+            with crd2:
+                if st.button("Cancel", key=f"cancel_reject_decision_{app_key}_{idx}", use_container_width=True):
+                    st.session_state.pop(f"action_{app_key}", None)
+                    st.rerun()
+
         st.markdown('<div style="height:0.3rem;"></div>', unsafe_allow_html=True)
 
 
@@ -660,7 +766,7 @@ def interview_reports_hub_tab():
     with st.spinner("Loading candidates..."):
         apps = load_applications(uid)
 
-    completed_apps = [a for a in apps if a.get("has_report") or a.get("status") in {"Interview Completed", "Report Generated", "Shortlisted", "Hired"}]
+    completed_apps = [a for a in apps if a.get("has_report") or a.get("status") in {"Interview Completed", "Report Generated", "Hired"}]
 
     if not completed_apps:
         st.markdown("""<div class="empty-state"><span class="es-icon"><i class="fa-solid fa-chart-bar"></i></span><p>// no interview reports available yet</p></div>""", unsafe_allow_html=True)
@@ -765,6 +871,15 @@ def interview_reports_hub_tab():
             qs = [{"question": r["question"], "category": r.get("category",""), "expected_keywords": []} for r in qd]
             an = {i: r.get("answer","") for i, r in enumerate(qd)}
             sc = {i: {"score": r.get("score",0), "correct": r.get("correct",False), "feedback": r.get("feedback","")} for i, r in enumerate(qd)}
+            emotion_summary_rec = {
+                "total_samples":   1,
+                "avg_confidence":  rpt_fetched.get("avg_confidence", 0),
+                "avg_anxiety":     rpt_fetched.get("avg_anxiety", 0),
+                "avg_composed":    rpt_fetched.get("avg_composed", 0),
+                "dominant_emotion":rpt_fetched.get("dominant_emotion", "Neutral"),
+                "overall_score":   rpt_fetched.get("emotion_behavioral_score", 50),
+                "assessment":      rpt_fetched.get("emotion_assessment", ""),
+            }
             try:
                 pdf_bytes_rec = generate_pdf_report(
                     candidate_name=rpt_fetched.get("candidate_name", selected_name),
@@ -772,6 +887,7 @@ def interview_reports_hub_tab():
                     company=rpt_fetched.get("company_name",""),
                     questions=qs, answers=an, scores=sc,
                     completed_at=rpt_fetched.get("completed_at",""),
+                    emotion_summary=emotion_summary_rec,
                 )
                 st.download_button(
                     "⬇️  Download PDF Report", data=pdf_bytes_rec,

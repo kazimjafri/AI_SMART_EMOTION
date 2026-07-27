@@ -13,6 +13,8 @@ import av
 import streamlit as st
 from streamlit_webrtc import VideoProcessorBase
 
+from interview.object_detector import detect_flagged_objects
+
 # Haar Cascade load karna (Fast face detection ke liye)
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
@@ -88,9 +90,32 @@ class EmotionVideoProcessor(VideoProcessorBase):
         self.latest_result = None
         self.timeline = []
 
+        # Object detection state
+        self.object_sample_every_n_frames = 20
+        self.object_alert = []          # list of flagged class names currently visible
+        self.object_alert_log = []      # every distinct alert seen, for the final report
+
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         img = frame.to_ndarray(format="bgr24")
         img = cv2.flip(img, 1)
+        self.frame_count += 1
+
+        # ── Object detection (phone / laptop / book etc.) ──
+        if self.frame_count % self.object_sample_every_n_frames == 0:
+            flagged = detect_flagged_objects(img)
+            with self.lock:
+                self.object_alert = flagged
+                for name in flagged:
+                    if name not in self.object_alert_log:
+                        self.object_alert_log.append(name)
+
+        with self.lock:
+            current_alert = list(self.object_alert)
+
+        if current_alert:
+            alert_text = f"OBJECT DETECTED: {', '.join(current_alert).upper()} — PLEASE REMOVE IT"
+            cv2.rectangle(img, (0, 0), (img.shape[1], 36), (0, 0, 200), -1)
+            cv2.putText(img, alert_text, (12, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
 
         # 1. Fast Face Detection
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -103,7 +128,6 @@ class EmotionVideoProcessor(VideoProcessorBase):
             cv2.putText(img, "Please look into the camera", (20, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
         else:
             # 3. Analyze Emotion only when face exists[cite: 5]
-            self.frame_count += 1
             if self.frame_count % self.sample_every_n_frames == 0:
                 result = _analyze_frame(img)
                 if result:
@@ -127,11 +151,23 @@ class EmotionVideoProcessor(VideoProcessorBase):
     def get_timeline(self):
         with self.lock: return list(self.timeline)
 
+    def get_object_alert(self):
+        """Returns the list of flagged objects currently visible (empty list = all clear)."""
+        with self.lock:
+            return list(self.object_alert)
+
+    def get_object_alert_log(self):
+        """Returns every distinct flagged object seen at any point during the interview."""
+        with self.lock:
+            return list(self.object_alert_log)
+
     def reset(self):
         with self.lock:
             self.timeline = []
             self.latest_result = None
             self.frame_count = 0
+            self.object_alert = []
+            self.object_alert_log = []
 
 def compute_emotion_summary(timeline):
     """Aggregate collected emotion data for the report[cite: 5]."""

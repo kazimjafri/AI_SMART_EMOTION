@@ -43,7 +43,7 @@ st.markdown(
 # PAGE CONFIG
 # ===========================
 st.set_page_config(
-    page_title="AI Interview Assistant",
+    page_title="InterviewAI",
     page_icon="🌿",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -887,106 +887,26 @@ def generate_pdf_report(
     answers: dict,
     scores: dict,
     completed_at: str,
+    emotion_summary: dict = None,
 ) -> bytes:
-    import io
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.pagesizes import letter
-    from reportlab.lib import colors
-    from reportlab.lib.units import inch
-
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=letter,
-                            leftMargin=0.85*inch, rightMargin=0.85*inch,
-                            topMargin=0.9*inch, bottomMargin=0.9*inch)
-    styles = getSampleStyleSheet()
-
-    title_style = ParagraphStyle("Title2", parent=styles["Heading1"], fontSize=20,
-                                 textColor=colors.HexColor("#059669"), spaceAfter=4, fontName="Helvetica-Bold")
-    sub_style   = ParagraphStyle("Sub",    parent=styles["Normal"],   fontSize=10,
-                                 textColor=colors.HexColor("#4a7060"), spaceAfter=14, fontName="Helvetica")
-    section_style = ParagraphStyle("Section", parent=styles["Heading2"], fontSize=12,
-                                   textColor=colors.HexColor("#0d2218"), spaceBefore=16, spaceAfter=6, fontName="Helvetica-Bold")
-    q_style  = ParagraphStyle("Q",  parent=styles["Normal"], fontSize=10, textColor=colors.HexColor("#0d2218"),
-                               fontName="Helvetica-Bold", spaceBefore=10, spaceAfter=3)
-    a_style  = ParagraphStyle("A",  parent=styles["Normal"], fontSize=9.5, textColor=colors.HexColor("#374151"),
-                               fontName="Helvetica", spaceAfter=3, leftIndent=12)
-    fb_style = ParagraphStyle("FB", parent=styles["Normal"], fontSize=9,  textColor=colors.HexColor("#6b7280"),
-                               fontName="Helvetica-Oblique", spaceAfter=6, leftIndent=12)
-    small_style = ParagraphStyle("Small", parent=styles["Normal"], fontSize=8.5, textColor=colors.HexColor("#9ca3af"),
-                                 fontName="Helvetica", spaceAfter=2)
-
-    story = []
-    story.append(Paragraph("InterviewAI — Evaluation Report", title_style))
-    story.append(Paragraph(f"{candidate_name}  ·  {job_title} at {company}  ·  {completed_at[:10]}", sub_style))
-    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e2ede8")))
-    story.append(Spacer(1, 10))
-
-    total_q   = len(questions)
-    answered  = sum(1 for i in range(total_q) if answers.get(i, "").strip())
-    correct   = sum(1 for i in range(total_q) if scores.get(i, {}).get("correct", False))
-    avg_score = round(sum(scores.get(i, {}).get("score", 0) for i in range(total_q)) / total_q) if total_q else 0
-    pass_fail = "PASS ✓" if avg_score >= 60 else "FAIL ✗"
-    pf_color  = colors.HexColor("#059669") if avg_score >= 60 else colors.HexColor("#dc2626")
-
-    summary_data = [
-        ["Metric", "Value"],
-        ["Overall Score",    f"{avg_score}/100"],
-        ["Result",           pass_fail],
-        ["Questions",        str(total_q)],
-        ["Answered",         str(answered)],
-        ["Correct (≥60%)",   str(correct)],
-        ["Incorrect (<60%)", str(answered - correct)],
-        ["Skipped",          str(total_q - answered)],
-    ]
-    t = Table(summary_data, colWidths=[2.6*inch, 2.4*inch])
-    t.setStyle(TableStyle([
-        ("BACKGROUND",    (0,0), (-1,0), colors.HexColor("#059669")),
-        ("TEXTCOLOR",     (0,0), (-1,0), colors.white),
-        ("FONTNAME",      (0,0), (-1,0), "Helvetica-Bold"),
-        ("FONTSIZE",      (0,0), (-1,0), 9),
-        ("ROWBACKGROUNDS",(0,1), (-1,-1), [colors.HexColor("#f9fcfa"), colors.white]),
-        ("FONTNAME",      (0,1), (-1,-1), "Helvetica"),
-        ("FONTSIZE",      (0,1), (-1,-1), 9),
-        ("TEXTCOLOR",     (0,1), (0,-1), colors.HexColor("#374151")),
-        ("TEXTCOLOR",     (1,2), (1,2),  pf_color),
-        ("FONTNAME",      (1,2), (1,2),  "Helvetica-Bold"),
-        ("GRID",          (0,0), (-1,-1), 0.4, colors.HexColor("#e2ede8")),
-        ("TOPPADDING",    (0,0), (-1,-1), 6),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 6),
-        ("LEFTPADDING",   (0,0), (-1,-1), 10),
-        ("ALIGN",         (1,0), (1,-1), "CENTER"),
-        ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
-    ]))
-    story.append(t)
-    story.append(Spacer(1, 18))
-    story.append(Paragraph("Question-by-Question Breakdown", section_style))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#e2ede8")))
-
-    for i, q_obj in enumerate(questions):
-        q_text   = q_obj.get("question", "—")
-        category = q_obj.get("category", "—")
-        answer   = answers.get(i, "").strip() or "(No answer provided)"
-        sc       = scores.get(i, {})
-        score    = sc.get("score", 0)
-        feedback = sc.get("feedback", "—")
-        is_correct = sc.get("correct", False)
-        score_color_hex = "#059669" if is_correct else "#dc2626"
-        result_label    = "✓ Correct" if is_correct else "✗ Needs Work"
-
-        story.append(Paragraph(f"Q{i+1}. [{category}]  {q_text}", q_style))
-        story.append(Paragraph(f"Answer: {answer}", a_style))
-        story.append(Paragraph(
-            f"<font color='{score_color_hex}'><b>Score: {score}/100 — {result_label}</b></font>",
-            ParagraphStyle("ScoreLine", parent=a_style, fontSize=9, spaceAfter=2)
-        ))
-        story.append(Paragraph(f"Feedback: {feedback}", fb_style))
-        story.append(HRFlowable(width="100%", thickness=0.3, color=colors.HexColor("#edf5f0")))
-
-    story.append(Spacer(1, 20))
-    story.append(Paragraph(f"Generated by InterviewAI · {completed_at}", small_style))
-    doc.build(story)
-    return buf.getvalue()
+    """
+    Thin wrapper kept for backward compatibility (candidate.py and
+    recruiter.py both import generate_pdf_report from app).
+    Delegates to reports/pdf_generator.py so the PDF layout — including
+    the Emotion & Behavioral Analysis section — stays identical no
+    matter which screen the download was triggered from.
+    """
+    from reports.pdf_generator import generate_interview_report_pdf
+    return generate_interview_report_pdf(
+        candidate_name=candidate_name,
+        job_title=job_title,
+        company=company,
+        questions=questions,
+        answers=answers,
+        scores=scores,
+        completed_at=completed_at,
+        emotion_summary=emotion_summary,
+    )
 
 
 # ===========================
@@ -1001,26 +921,12 @@ def save_interview_report_to_firebase(
 ) -> str:
     pdf_b64 = base64.b64encode(pdf_bytes).decode()
     try:
+        from reports.post_interview import resolve_status_after_report
+
         realtime_db.reference(f"interview_reports/{uid}/{app_key}").set(report_payload)
-        now = datetime.utcnow().isoformat()
-        realtime_db.reference(f"candidates/{uid}/applications/{app_key}").update({
-            "status":             "Report Generated",
-            "last_status_change": now,
-            "has_report":         True,
-            "overall_score":      report_payload.get("overall_score", 0),
-        })
-        if recruiter_uid:
-            rec_apps = realtime_db.reference(f"recruiters/{recruiter_uid}/applications").get()
-            if rec_apps:
-                for k, v in rec_apps.items():
-                    if v.get("candidate_uid") == uid:
-                        realtime_db.reference(f"recruiters/{recruiter_uid}/applications/{k}").update({
-                            "status":     "Report Generated",
-                            "has_report": True,
-                            "last_status_change": now,
-                            "overall_score": report_payload.get("overall_score", 0),
-                        })
-                        break
+        resolve_status_after_report(
+            realtime_db, uid, app_key, recruiter_uid, report_payload
+        )
     except Exception as e:
         st.warning(f"⚠️ Could not save to Firebase: {e}")
     return pdf_b64

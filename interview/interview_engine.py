@@ -57,6 +57,14 @@ def _set(key: str, value):
     st.session_state[_KEYS.get(key, key)] = value
 
 
+# ───────────────────────────────────────────
+# FRAGMENT COMPAT SHIM
+# st.fragment must be declared at module level (not created dynamically)
+# so run_every actually ticks (used for live object-detection alerts).
+# ───────────────────────────────────────────
+_fragment = getattr(st, "fragment", None) or getattr(st, "experimental_fragment", None)
+
+
 def _reset_interview():
     """Clear all interview session state."""
     for k in _KEYS.values():
@@ -178,7 +186,7 @@ Respond ONLY with a valid JSON array (no markdown):
         import google.generativeai as genai_sdk
         import json
         genai_sdk.configure(api_key=api_key)
-        model    = genai_sdk.GenerativeModel("gemini-2.5-flash-lite")
+        model    = genai_sdk.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         raw      = response.text.strip()
 
@@ -507,7 +515,7 @@ def _render_briefing(job_ctx: dict, profile: dict, webrtc_ctx):
     tips = [
         ("🎙️", "Speak clearly", "Press the mic button, answer, then press stop. Speak at a natural pace."),
         ("📷", "Camera on", "Allow camera access below. Sit in a well-lit area facing the camera."),
-        ("⏭️", "Take your time", "There is no time limit per question. Move on when you are ready."),
+        ("⏭️", "Skip if needed", "You can skip any question using the Skip button and move on when ready."),
     ]
     for col, (icon, title, desc) in zip([c1, c2, c3], tips):
         with col:
@@ -570,6 +578,68 @@ def _render_briefing(job_ctx: dict, profile: dict, webrtc_ctx):
 # (camera widget is already rendered above this, by render_interview_page)
 # ───────────────────────────────────────────
 
+def _render_question_header(job_title: str, current: int, total: int):
+    st.markdown(f"""
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+      <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--text-muted);
+                   text-transform:uppercase;letter-spacing:2px;">// {job_title}</span>
+      <span style="font-family:'DM Mono',monospace;font-size:0.7rem;color:var(--text-mono);">Q{current + 1} / {total}</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def _stop_recording(webrtc_ctx):
+    _set("is_recording", False)
+    if webrtc_ctx and webrtc_ctx.audio_processor:
+        try:
+            webrtc_ctx.audio_processor.stop_recording()
+        except Exception:
+            pass
+
+
+def _skip_current_question(current: int, total: int, webrtc_ctx):
+    """Mark the current question as skipped and advance."""
+    answers = _ss("answers", {})
+    scores = _ss("scores", {})
+    answers[current] = ""
+    scores[current] = {
+        "score": 0,
+        "correct": False,
+        "feedback": "⏭️ Question skipped by candidate.",
+        "skipped": True,
+    }
+    _set("answers", answers)
+    _set("scores", scores)
+    _stop_recording(webrtc_ctx)
+
+    if current < total - 1:
+        _set("current_q", current + 1)
+    else:
+        if webrtc_ctx and webrtc_ctx.video_processor:
+            _set("emotion_tl", webrtc_ctx.video_processor.get_timeline())
+        _set("phase", "evaluating")
+
+
+def _render_object_alert(webrtc_ctx):
+    """Show prohibited-object alert; refreshes via fragment when available."""
+    if not (webrtc_ctx and webrtc_ctx.video_processor):
+        return
+
+    alert = webrtc_ctx.video_processor.get_object_alert()
+    if alert:
+        labels = ", ".join(a.replace("_", " ").title() for a in alert)
+        st.error(f"🚫 Prohibited object detected: **{labels}** — please remove it from camera view.")
+
+
+if _fragment is not None:
+    @_fragment(run_every=1)
+    def _tick_object_alert(webrtc_ctx):
+        _render_object_alert(webrtc_ctx)
+else:
+    def _tick_object_alert(webrtc_ctx):
+        _render_object_alert(webrtc_ctx)
+
+
 def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
     """
     Renders the question card and recording controls. 
@@ -591,14 +661,7 @@ def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
     category  = q_obj.get("category",  "General")
     keywords  = q_obj.get("expected_keywords", [])
 
-    # ── Header ──
-    st.markdown(f"""
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
-      <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--text-muted);
-                   text-transform:uppercase;letter-spacing:2px;">// {job_title}</span>
-      <span style="font-family:'DM Mono',monospace;font-size:0.7rem;color:var(--text-mono);">Q{current + 1} / {total}</span>
-    </div>
-    """, unsafe_allow_html=True)
+    _render_question_header(job_title, current, total)
 
     # Progress bar
     pct = int((current / total) * 100)
@@ -648,19 +711,31 @@ def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
             st.rerun()
 
     # ── Navigation ──
-    nav1, _, nav2 = st.columns([1, 2, 1])
+    nav1, nav_skip, nav2 = st.columns([1, 1, 1])
     with nav1:
-        if current > 0 and st.button("← Back", use_container_width=True):
-            _set("current_q", current - 1); _set("is_recording", False); st.rerun()
+        if current > 0 and st.button("← Back", use_container_width=True, key=f"iv2_back_{current}"):
+            _stop_recording(webrtc_ctx)
+            _set("current_q", current - 1)
+            st.rerun()
+    with nav_skip:
+        if st.button("⏭️ Skip", use_container_width=True, key=f"iv2_skip_{current}"):
+            _skip_current_question(current, total, webrtc_ctx)
+            st.rerun()
     with nav2:
         if current < total - 1:
-            if st.button("Next →", use_container_width=True):
-                if not _ss("answers", {}).get(current, "").strip(): st.warning("Record an answer first!")
-                else: _set("current_q", current + 1); _set("is_recording", False); st.rerun()
+            if st.button("Next →", use_container_width=True, key=f"iv2_next_{current}"):
+                if not _ss("answers", {}).get(current, "").strip():
+                    st.warning("Record an answer first, or use Skip.")
+                else:
+                    _stop_recording(webrtc_ctx)
+                    _set("current_q", current + 1)
+                    st.rerun()
         else:
-            if st.button("✅ Finish Interview", use_container_width=True):
-                if webrtc_ctx and webrtc_ctx.video_processor: _set("emotion_tl", webrtc_ctx.video_processor.get_timeline())
-                _set("phase", "evaluating"); st.rerun()
+            if st.button("✅ Finish Interview", use_container_width=True, key=f"iv2_finish_{current}"):
+                if webrtc_ctx and webrtc_ctx.video_processor:
+                    _set("emotion_tl", webrtc_ctx.video_processor.get_timeline())
+                _set("phase", "evaluating")
+                st.rerun()
 
     # ── Progress dots ──
     answers = _ss("answers", {})
@@ -668,11 +743,15 @@ def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
     dots_html = ""
     for i in range(total):
         has_answer = bool(answers.get(i, "").strip())
-        has_score  = i in scores
+        score_entry = scores.get(i)
+        has_score  = score_entry is not None
+        is_skipped = bool(score_entry and score_entry.get("skipped"))
         if i == current:
             col = "var(--accent)"
+        elif is_skipped:
+            col = "#94a3b8"
         elif has_score:
-            col = "#10b981" if scores[i].get("correct") else "#ef4444"
+            col = "#10b981" if score_entry.get("correct") else "#ef4444"
         elif has_answer:
             col = "#d97706"
         else:
@@ -686,7 +765,7 @@ def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
         f'<div class="iv-dots">{dots_html}</div>'
         f'<div style="text-align:center;font-family:\'DM Mono\',monospace;font-size:0.6rem;'
         f'color:var(--text-muted);margin-top:0.4rem;letter-spacing:0.5px;">'
-        f'🟢 scored &nbsp; 🔴 needs work &nbsp; 🟡 recorded &nbsp; ⚪ pending</div>',
+        f'🟢 scored &nbsp; 🔴 needs work &nbsp; 🟡 recorded &nbsp; ⚪ pending &nbsp; ⬜ skipped</div>',
         unsafe_allow_html=True
     )
 
@@ -927,6 +1006,8 @@ def _render_done(job_ctx: dict, profile: dict):
                         "total_questions":  total_q,
                         "avg_confidence":   emotion_summary.get("avg_confidence", 0),
                         "avg_anxiety":      emotion_summary.get("avg_anxiety",    0),
+                        "avg_composed":     emotion_summary.get("avg_composed",   0),
+                        "emotion_behavioral_score": emotion_summary.get("overall_score", 50),
                         "dominant_emotion": emotion_summary.get("dominant_emotion","Neutral"),
                         "emotion_assessment": emotion_summary.get("assessment",   ""),
                         "completed_at":     completed_at,
@@ -975,15 +1056,11 @@ def _render_done(job_ctx: dict, profile: dict):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    col_back, col_retry = st.columns([1, 1])
-    with col_back:
+    col_back1, col_back2, col_back3 = st.columns([1, 1.5, 1])
+    with col_back2:
         if st.button("← Back to Dashboard", use_container_width=True, key="iv2_done_home"):
             _reset_interview()
             st.session_state.current_page = "dashboard"
-            st.rerun()
-    with col_retry:
-        if st.button("🔄 Retake Interview", use_container_width=True, key="iv2_retake"):
-            _reset_interview()
             st.rerun()
 
 
@@ -1032,12 +1109,13 @@ def render_interview_page():
     elif phase == "question":
         # Split layout for questions: Question (2/3) + Camera (1/3)
         col_left, col_right = st.columns([2, 1])
-        
+
         # Camera is rendered inside the right column
         with col_right:
             st.markdown("### 📷 Live Camera")
             webrtc_ctx = _get_webrtc_ctx()
-            
+            _tick_object_alert(webrtc_ctx)
+
         with col_left:
             _render_question_screen(job_ctx, profile, webrtc_ctx)
 

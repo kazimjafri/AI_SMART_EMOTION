@@ -188,7 +188,7 @@ def check_interview_deadlines(uid: str, applications: list) -> list:
 
 
 def check_status_notifications(applications: list, last_seen: str) -> list:
-    notable_statuses = {"Shortlisted", "Hired", "Rejected", "Interview Scheduled", "Cancelled"}
+    notable_statuses = {"Hired", "Rejected", "Interview Scheduled", "Cancelled", "Report Generated"}
     if not last_seen:
         return []
     return [
@@ -326,14 +326,15 @@ def _app_status_badge_html(status: str) -> str:
     return f'<span class="status-badge {cls_map.get(status,"status-applied")}">{dot_map.get(status,"●")} {status}</span>'
 
 
-_PIPELINE_STAGES = ["Applied", "Pending Review", "Interview Scheduled", "Report Generated", "Shortlisted", "Hired"]
+_PIPELINE_STAGES = ["Applied", "Pending Review", "Interview Scheduled", "Report Generated", "Hired"]
 _TERMINAL_NEGATIVE = "Rejected"
 
 
 def _pipeline_html(current_status: str) -> str:
-    is_rejected = current_status == _TERMINAL_NEGATIVE
+    display_status = "Report Generated" if current_status == "Shortlisted" else current_status
+    is_rejected = display_status == _TERMINAL_NEGATIVE
     try:
-        active_idx = _PIPELINE_STAGES.index(current_status)
+        active_idx = _PIPELINE_STAGES.index(display_status)
     except ValueError:
         active_idx = -1
 
@@ -349,7 +350,7 @@ def _pipeline_html(current_status: str) -> str:
         short_labels = {
             "Applied": "Applied", "Pending Review": "Review",
             "Interview Scheduled": "Interview", "Report Generated": "Report",
-            "Shortlisted": "Listed", "Hired": "Hired",
+            "Hired": "Hired",
         }
         label = short_labels.get(stage, stage)
         nodes_html += (
@@ -694,9 +695,11 @@ def application_history_tab():
         st.markdown('<div class="section-heading">🔔 What\'s new</div>', unsafe_allow_html=True)
         for notif in notifications:
             status    = notif.get("status", "")
-            notif_cls = {"Shortlisted": "notif-shortlisted", "Hired": "notif-hired", "Rejected": "notif-rejected",
-                         "Interview Scheduled": "notif-hired", "Cancelled": "notif-rejected"}.get(status, "notif-shortlisted")
-            icon = {"Shortlisted": "⭐", "Hired": "🎉", "Rejected": "📭", "Interview Scheduled": "📅", "Cancelled": "⏰"}.get(status, "🔔")
+            notif_cls = {"Hired": "notif-hired", "Rejected": "notif-rejected",
+                         "Interview Scheduled": "notif-hired", "Cancelled": "notif-rejected",
+                         "Report Generated": "notif-shortlisted"}.get(status, "notif-shortlisted")
+            icon = {"Hired": "🎉", "Rejected": "📭", "Interview Scheduled": "📅",
+                    "Cancelled": "⏰", "Report Generated": "📄"}.get(status, "🔔")
             st.markdown(
                 f'<div class="notif-banner {notif_cls}"><span class="nb-icon">{icon}</span>'
                 f'<div><div class="nb-title">Your application for <strong>{notif.get("job_title","—")}</strong> at {notif.get("company_name","—")} is now: {status}</div>'
@@ -707,8 +710,8 @@ def application_history_tab():
 
     total_apps    = len(apps)
     interviews_sc = sum(1 for a in apps if a.get("status") == "Interview Scheduled")
-    reports_ready = sum(1 for a in apps if a.get("status") in {"Report Generated", "Shortlisted", "Hired", "Rejected"} and a.get("interview_report_url"))
-    shortlisted   = sum(1 for a in apps if a.get("status") == "Shortlisted")
+    reports_ready = sum(1 for a in apps if a.get("status") in {"Report Generated", "Hired", "Rejected"} and a.get("interview_report_url"))
+    hired_count   = sum(1 for a in apps if a.get("status") == "Hired")
 
     st.markdown('<div class="section-heading">Your summary</div>', unsafe_allow_html=True)
     s1, s2, s3, s4 = st.columns(4, gap="small")
@@ -716,7 +719,7 @@ def application_history_tab():
         (total_apps,    "", "total applied"),
         (interviews_sc, "", "interviews scheduled"),
         (reports_ready, "", "reports ready"),
-        (shortlisted,   "", "shortlisted"),
+        (hired_count,   "", "hired"),
     ]):
         with col:
             st.markdown(f'<div class="stat-card"><div class="stat-num">{n}<span>{sfx}</span></div><div class="stat-label">{lbl}</div></div>', unsafe_allow_html=True)
@@ -799,8 +802,20 @@ def application_history_tab():
         actions = []
         if status == "Applied":             actions.append("withdraw")
         if status == "Interview Scheduled": actions.append("start_interview")
-        if report_url and status in {"Report Generated", "Shortlisted", "Hired", "Rejected"}:
+        if report_url and status in {"Report Generated", "Hired", "Rejected"}:
             actions.append("download_report")
+
+        status_message = app.get("status_message", "")
+        if status_message and status in {"Hired", "Rejected"}:
+            banner_cls = "notif-hired" if status == "Hired" else "notif-rejected"
+            banner_icon = "🎉" if status == "Hired" else "📭"
+            st.markdown(
+                f'<div class="notif-banner {banner_cls}" style="margin:0.5rem 0;">'
+                f'<span class="nb-icon">{banner_icon}</span>'
+                f'<div><div class="nb-title">{status_message}</div>'
+                f'<div class="nb-sub">// {status.lower()} · {app.get("last_status_change","")[:10]}</div></div></div>',
+                unsafe_allow_html=True,
+            )
 
         if actions:
             from app import generate_pdf_report  # local import to avoid circular
@@ -841,12 +856,22 @@ def application_history_tab():
                             qs = [{"question": r["question"], "category": r.get("category",""), "expected_keywords": []} for r in qd]
                             an = {i: r.get("answer","") for i, r in enumerate(qd)}
                             sc = {i: {"score": r.get("score",0), "correct": r.get("correct",False), "feedback": r.get("feedback","")} for i, r in enumerate(qd)}
+                            emotion_summary_dl = {
+                                "total_samples":   1,
+                                "avg_confidence":  rpt.get("avg_confidence", 0),
+                                "avg_anxiety":     rpt.get("avg_anxiety", 0),
+                                "avg_composed":    rpt.get("avg_composed", 0),
+                                "dominant_emotion":rpt.get("dominant_emotion", "Neutral"),
+                                "overall_score":   rpt.get("emotion_behavioral_score", 50),
+                                "assessment":      rpt.get("emotion_assessment", ""),
+                            }
                             pdf_bytes_inline = generate_pdf_report(
                                 candidate_name=rpt.get("candidate_name", st.session_state.user_name),
                                 job_title=rpt.get("job_title",""),
                                 company=rpt.get("company_name",""),
                                 questions=qs, answers=an, scores=sc,
                                 completed_at=rpt.get("completed_at",""),
+                                emotion_summary=emotion_summary_dl,
                             )
                             st.download_button(
                                 "⬇️ Download Report", data=pdf_bytes_inline,
@@ -1036,9 +1061,11 @@ def _candidate_overview_tab():
         st.markdown('<div class="section-heading">🔔 Updates since last login</div>', unsafe_allow_html=True)
         for notif in notifications:
             status    = notif.get("status", "")
-            notif_cls = {"Shortlisted": "notif-shortlisted", "Hired": "notif-hired", "Rejected": "notif-rejected",
-                         "Interview Scheduled": "notif-hired", "Cancelled": "notif-rejected"}.get(status, "notif-shortlisted")
-            icon = {"Shortlisted": "⭐", "Hired": "🎉", "Rejected": "📭", "Interview Scheduled": "📅", "Cancelled": "⏰"}.get(status, "🔔")
+            notif_cls = {"Hired": "notif-hired", "Rejected": "notif-rejected",
+                         "Interview Scheduled": "notif-hired", "Cancelled": "notif-rejected",
+                         "Report Generated": "notif-shortlisted"}.get(status, "notif-shortlisted")
+            icon = {"Hired": "🎉", "Rejected": "📭", "Interview Scheduled": "📅",
+                    "Cancelled": "⏰", "Report Generated": "📄"}.get(status, "🔔")
             st.markdown(
                 f'<div class="notif-banner {notif_cls}"><span class="nb-icon">{icon}</span>'
                 f'<div><div class="nb-title"><strong>{notif.get("job_title","—")}</strong> at {notif.get("company_name","—")} — status changed to: {status}</div>'
@@ -1050,7 +1077,7 @@ def _candidate_overview_tab():
     total_applied  = len(candidate_apps)
     interviews_sch = sum(1 for a in candidate_apps if a.get("status") == "Interview Scheduled")
     reports_rdy    = sum(1 for a in candidate_apps if a.get("interview_report_url") and
-                         a.get("status") in {"Report Generated", "Shortlisted", "Hired", "Rejected"})
+                         a.get("status") in {"Report Generated", "Hired", "Rejected"})
 
     if total_applied > 0:
         active_count = get_active_application_count(candidate_apps)
@@ -1060,7 +1087,7 @@ def _candidate_overview_tab():
             (active_count,   "", "active applications"),
             (interviews_sch, "", "interviews scheduled"),
             (reports_rdy,    "", "reports ready"),
-            (sum(1 for a in candidate_apps if a.get("status") == "Shortlisted"), "", "shortlisted"),
+            (sum(1 for a in candidate_apps if a.get("status") == "Hired"), "", "hired"),
         ]):
             with col:
                 st.markdown(f'<div class="stat-card"><div class="stat-num">{n}<span>{sfx}</span></div><div class="stat-label">{lbl}</div></div>', unsafe_allow_html=True)
@@ -1113,6 +1140,3 @@ def _candidate_overview_tab():
                     f'<div style="font-family:\'DM Mono\',monospace;font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:0.6rem;">// primary skills</div>'
                     f'{pills}</div>', unsafe_allow_html=True
                 )
-
-    st.markdown('<div class="section-heading">Recent interviews</div>', unsafe_allow_html=True)
-    st.markdown("""<div class="empty-state"><span class="es-icon"><i class="fa-regular fa-folder-open"></i></span><p>// no sessions yet — start one above</p></div>""", unsafe_allow_html=True)

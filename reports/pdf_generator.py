@@ -160,7 +160,6 @@ def generate_interview_report_pdf(
             ["Composure",               f"{avg_comp}%", _score_label(avg_comp)],
             ["Dominant Emotion",        dom_em,         ""],
             ["Behavioral Score",        f"{em_score}/100",""],
-            ["Frames Analyzed",         str(samples),   ""],
         ]
         et = Table(emotion_data, colWidths=[2.2 * inch, 1.2 * inch, 2.6 * inch])
         et.setStyle(TableStyle([
@@ -183,13 +182,6 @@ def generate_interview_report_pdf(
         if assess:
             story.append(Spacer(1, 8))
             story.append(Paragraph(f"Assessment: {assess}", emotion_label_style))
-
-        # Emotion distribution
-        em_dist = emotion_summary.get("emotion_distribution", {})
-        if em_dist:
-            story.append(Spacer(1, 6))
-            dist_text = "  ·  ".join(f"{em}: {pct}%" for em, pct in em_dist.items())
-            story.append(Paragraph(f"Emotion breakdown: {dist_text}", emotion_label_style))
 
         story.append(Spacer(1, 14))
 
