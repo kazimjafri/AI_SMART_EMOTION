@@ -214,6 +214,9 @@ def submit_application(uid: str, job_data: dict) -> bool:
             "core_skills":          job_data.get("core_skills", []),
             "min_speech_clarity":   job_data.get("min_speech_clarity", 60),
             "min_score":            job_data.get("min_score", 60),
+            "num_questions":        job_data.get("num_questions", 10),
+            "interview_type":       job_data.get("interview_type", "Mixed"),
+            "experience_level":     job_data.get("experience_level", "Mid"),
         }
         app_payload_recruiter = {
             "candidate_uid":      uid,
@@ -838,6 +841,9 @@ def application_history_tab():
                         "core_skills":        app.get("core_skills", []),
                         "min_speech_clarity": app.get("min_speech_clarity", 60),
                         "min_score":          app.get("min_score", 60),
+                        "num_questions":      app.get("num_questions", 10),
+                        "interview_type":     app.get("interview_type", "Mixed"),
+                        "experience_level":   app.get("experience_level", "Mid"),
                         "app_key":            app_key,
                         "recruiter_uid":      recruiter_uid,
                     }

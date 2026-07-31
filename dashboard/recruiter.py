@@ -923,7 +923,7 @@ def render_recruiter_dashboard():
 
     st.markdown(f"""
     <div class="page-hero">
-      <span class="eyebrow">// Recruiter Command Centre</span>
+      <span class="eyebrow">// Recruiter Dashboard</span>
       <h1>Welcome back,<br>{st.session_state.user_name}.</h1>
       <p class="sub">
         {company_name}

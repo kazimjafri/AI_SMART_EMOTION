@@ -18,8 +18,13 @@ deepface==0.0.79
 # SPEECH & AUDIO
 # =========================
 SpeechRecognition
-pyttsx3
-pyaudio==0.2.11   
+faster-whisper
+
+# =========================
+# CAMERA / MIC (BROWSER-BASED, WEBRTC)
+# =========================
+streamlit-webrtc
+av
 
 # =========================
 # GOOGLE GEMINI (COMPATIBLE)
@@ -31,6 +36,7 @@ google-generativeai==0.8.6
 # =========================
 firebase-admin
 pyrebase4
+google-cloud-firestore
 
 # =========================
 # UI
@@ -42,6 +48,11 @@ streamlit-authenticator
 # REPORT GENERATION
 # =========================
 reportlab
+
+# =========================
+# CONFIG
+# =========================
+python-dotenv
 
 joblib
 scikit-learn==1.7.2

@@ -42,9 +42,11 @@ st.markdown(
 # ===========================
 # PAGE CONFIG
 # ===========================
+_LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
+
 st.set_page_config(
-    page_title="InterviewAI",
-    page_icon="🌿",
+    page_title="AI Smart Emotion Interviewer",
+    page_icon=_LOGO_PATH if os.path.exists(_LOGO_PATH) else "🌿",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -479,6 +481,7 @@ header {{ visibility: hidden; }}
 .page-hero .eyebrow {{ font-family: 'DM Mono', monospace; font-size: 0.68rem; font-weight: 500; color: var(--text-mono); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0.8rem; display: block; }}
 .page-hero h1 {{ font-family: 'Sora', sans-serif; font-size: 2.4rem; font-weight: 800; color: var(--text-h); letter-spacing: -1px; line-height: 1.15; margin-bottom: 0.6rem; }}
 .page-hero .sub {{ font-family: 'Sora', sans-serif; font-size: 0.98rem; font-weight: 400; color: var(--text-body); line-height: 1.65; }}
+.page-hero .hero-logo {{ position: absolute; top: 2rem; right: 2.5rem; width: 200px; height: 200px; border-radius: 16px; z-index: 1; }}
 .feat-card {{ background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 1.75rem 1.5rem; box-shadow: var(--shadow-card); transition: box-shadow 0.22s, transform 0.22s; height: 100% !important; min-height: 220px !important; position: relative; overflow: hidden; display: flex !important; flex-direction: column !important; }}
 .feat-card:hover {{ box-shadow: var(--shadow-hover); transform: translateY(-4px); }}
 [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {{ display: flex !important; flex-direction: column !important; }}
@@ -510,7 +513,7 @@ header {{ visibility: hidden; }}
 .user-chip .uc-name {{ font-family: 'Sora', sans-serif; font-size: 0.9rem; font-weight: 700; color: var(--text-h); letter-spacing: -0.2px; }}
 .user-chip .uc-email {{ font-family: 'DM Mono', monospace; font-size: 0.68rem; color: var(--text-muted); margin-top: 3px; word-break: break-all; letter-spacing: 0.2px; }}
 .user-chip .uc-role {{ display: inline-block; background: var(--tag-bg); border: 1px solid var(--tag-border); border-radius: 4px; padding: 1px 8px; font-family: 'DM Mono', monospace; font-size: 0.65rem; color: var(--tag-txt); margin-top: 6px; letter-spacing: 0.5px; text-transform: uppercase; }}
-.sidebar-wordmark {{ font-family: 'Sora', sans-serif; font-size: 1.15rem; font-weight: 800; color: var(--text-h); letter-spacing: -0.5px; padding-bottom: 1.4rem; display: flex; align-items: center; gap: 0.5rem; }}
+.sidebar-wordmark {{ font-family: 'Sora', sans-serif; font-size: 1rem; font-weight: 800; color: var(--text-h); letter-spacing: -0.5px; padding-bottom: 1.4rem; display: flex; align-items: center;text-align: center; gap: 0.5rem; }}
 .sidebar-wordmark .dot {{ width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: inline-block; }}
 .sidebar-divider {{ height: 1px; background: var(--divider); margin: 0.9rem 0; }}
 .sidebar-section {{ font-family: 'DM Mono', monospace; font-size: 0.62rem; font-weight: 500; color: var(--text-muted); text-transform: uppercase; letter-spacing: 2px; padding: 0.5rem 0.2rem 0.4rem; }}
@@ -684,11 +687,25 @@ label, .stSelectbox label, .stMultiSelect label, .stTextArea label, .stRadio lab
 # ===========================
 # SIDEBAR
 # ===========================
+@st.cache_data
+def _load_logo_b64():
+    try:
+        with open(_LOGO_PATH, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+    except Exception:
+        return ""
+
+
 def sidebar():
     inject_css(st.session_state.dark_mode)
     with st.sidebar:
+        _logo_b64 = _load_logo_b64()
+        _logo_html = (
+            f'<img src="data:image/png;base64,{_logo_b64}" style="width:55px;height:55px;border-radius:6px;display:block;">'
+            if _logo_b64 else '<span class="dot"></span>'
+        )
         st.markdown(
-            '<div class="sidebar-wordmark"><span class="dot"></span>InterviewAI</div>',
+            f'<div class="sidebar-wordmark">{_logo_html}AI Smart Emotion Interviewer</div>',
             unsafe_allow_html=True
         )
 
@@ -748,7 +765,7 @@ def sidebar():
 
         st.markdown('<div class="sidebar-divider"></div>', unsafe_allow_html=True)
         st.markdown(
-            '<div class="sidebar-footer">© 2026 InterviewAI<br>All rights reserved</div>',
+            '<div class="sidebar-footer">© 2026 Smart Emotion<br>All rights reserved</div>',
             unsafe_allow_html=True
         )
 
@@ -757,8 +774,13 @@ def sidebar():
 # HOME PAGE
 # ===========================
 def home_page():
-    st.markdown("""
+    _logo_b64 = _load_logo_b64()
+    _hero_logo_html = (
+        f'<img class="hero-logo" src="data:image/png;base64,{_logo_b64}">' if _logo_b64 else ""
+    )
+    st.markdown(f"""
     <div class="page-hero">
+      {_hero_logo_html}
       <span class="eyebrow">// AI-Powered Interview Platform</span>
       <h1>Ace every interview,<br>every time.</h1>
       <p class="sub">Emotion-aware analysis · Voice-driven sessions · Gemini-powered evaluation.<br>Built for candidates who take their career seriously.</p>
@@ -771,7 +793,7 @@ def home_page():
         ("fa-microphone", "01", "Voice Recognition", "High-accuracy speech-to-text captures every word, pause, and nuance."),
         ("fa-face-smile", "02", "Emotion Analysis",  "Real-time facial detection reads confidence, stress, and engagement."),
         ("fa-robot",      "03", "AI Evaluation",     "Gemini generates adaptive questions and scores with context-awareness."),
-        ("fa-file-pdf",   "04", "Auto Reporting",    "Detailed PDF summaries with behavioral insights after every session."),
+        ("fa-file-pdf",   "04", "Auto Reporting",    "Detailed PDF summaries with behavioral insights after every interview."),
     ]
     for col, (icon, num, title, desc) in zip([col1, col2, col3, col4], feats):
         with col:
@@ -788,9 +810,9 @@ def home_page():
     st.markdown('<div class="section-heading">By the numbers</div>', unsafe_allow_html=True)
     s1, s2, s3, s4 = st.columns(4, gap="small")
     for col, (n, sfx, lbl) in zip([s1, s2, s3, s4], [
-        ("&lt;2", "min", "Avg report time"),
-        ("95",   "%",   "Detection accuracy"),
-        ("50",   "+",   "Job roles covered"),
+        ("3",   "Step",   "Process"),
+        ("&lt;1", "min", "Avg report time"),
+        ("15",   "+",   "Job roles covered"),
         ("24",   "/7",  "Always available"),
     ]):
         with col:
@@ -800,7 +822,7 @@ def home_page():
     st.markdown("""<div class="cta-strip"><h2>Ready to begin?</h2><p>Smarter hiring starts with a single session — no setup, no guesswork.</p></div>""", unsafe_allow_html=True)
     col_l, col_c, col_r = st.columns([1, 1.4, 1])
     with col_c:
-        if st.button("🚀  Start Your Interview Journey", use_container_width=True):
+        if st.button("Start Your Interview Journey", use_container_width=True):
             navigate_to("auth")
 
 

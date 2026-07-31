@@ -14,6 +14,8 @@ import os
 import cv2
 import streamlit as st
 
+cv2.setNumThreads(2)  # leave CPU headroom for audio processing
+
 # NOTE: models/ lives at the project root (AI_SMART_EMOTION/models/),
 # NOT inside interview/, so we go up one level from this file's directory.
 _MODEL_DIR   = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "models"))
