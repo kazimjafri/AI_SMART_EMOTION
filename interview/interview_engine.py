@@ -644,18 +644,20 @@ def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
     category  = q_obj.get("category",  "General")
     keywords  = q_obj.get("expected_keywords", [])
 
-    # ── Camera soft-lock ──
+    # ── Camera off notice (non-blocking) ──
     # The camera widget renders in an iframe, so its own STOP button can't be
     # hidden/disabled from here. Instead we detect if it's not currently
     # playing (stopped by the candidate, OR disconnected on its own due to a
-    # network hiccup / laptop sleep) and block progress until it's back on.
+    # network hiccup / laptop sleep) and just show a heads-up — the question,
+    # mic recorder, and Skip/Submit/Next controls below stay fully usable so
+    # the candidate isn't blocked mid-interview just because the camera dropped.
     if not _camera_ready(webrtc_ctx):
-        st.error(
-            "📷 **Camera is off.** The interview is paused — click **START** on the "
-            "camera widget to continue. (This can happen if you clicked stop, or if "
-            "the connection dropped due to network/laptop sleep.)"
+        st.warning(
+            "📷 **Camera is off.** Emotion tracking is paused, but you can keep "
+            "answering — click **START** on the camera widget above to resume "
+            "tracking. (This can happen if you clicked stop, or if the connection "
+            "dropped due to network/laptop sleep.)"
         )
-        st.stop()
 
     # ── Header ──
     st.markdown(f"""
@@ -1033,16 +1035,10 @@ def _render_done(job_ctx: dict, profile: dict):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    col_back, col_retry = st.columns([1, 1])
-    with col_back:
-        if st.button("← Back to Dashboard", use_container_width=True, key="iv2_done_home"):
-            _reset_interview()
-            st.session_state.current_page = "dashboard"
-            st.rerun()
-    with col_retry:
-        if st.button("🔄 Retake Interview", use_container_width=True, key="iv2_retake"):
-            _reset_interview()
-            st.rerun()
+    if st.button("← Back to Dashboard", use_container_width=True, key="iv2_done_home"):
+        _reset_interview()
+        st.session_state.current_page = "dashboard"
+        st.rerun()
 
 
 # ───────────────────────────────────────────
