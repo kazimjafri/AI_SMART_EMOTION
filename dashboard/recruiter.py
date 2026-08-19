@@ -10,6 +10,14 @@ from firebase_admin import db as realtime_db
 
 from utils.loading_ui import themed_loader
 
+from utils.email_sender import send_email, get_candidate_email
+from utils.email_templates import (
+    application_accepted_email,
+    application_rejected_email,
+    interview_hired_email,
+    interview_rejected_email,
+)
+
 # ===========================
 # RECRUITER FIREBASE HELPERS
 # ===========================
@@ -59,6 +67,29 @@ def load_job_postings(uid: str) -> list:
         return []
     except Exception:
         return []
+
+
+def update_job_posting(uid: str, job_key: str, updated_data: dict) -> bool:
+    try:
+        updated_data["updated_at"] = datetime.utcnow().isoformat()
+        realtime_db.reference(f"recruiters/{uid}/job_postings/{job_key}").update(updated_data)
+        return True
+    except Exception as e:
+        st.error(f"❌ Failed to update job posting: {str(e)}")
+        return False
+
+
+def toggle_job_posting_status(uid: str, job_key: str, new_status: str) -> bool:
+    try:
+        realtime_db.reference(f"recruiters/{uid}/job_postings/{job_key}").update({
+            "status": new_status,
+            "updated_at": datetime.utcnow().isoformat(),
+        })
+        return True
+    except Exception as e:
+        st.error(f"❌ Failed to update posting status: {str(e)}")
+        return False
+
 
 def load_applications(uid: str) -> list:
     try:
@@ -125,6 +156,46 @@ def _fetch_min_score(candidate_uid: str, cand_app_key: str, fallback: int = 60) 
     except Exception:
         pass
     return fallback
+
+
+def _build_report_pdf_for_candidate(candidate_uid: str, app_key: str, candidate_name: str) -> bytes:
+    """Fetch a candidate's saved interview report and generate the PDF bytes for emailing."""
+    try:
+        rpt = realtime_db.reference(f"interview_reports/{candidate_uid}/{app_key}").get()
+        if not rpt or not rpt.get("questions_data"):
+            return None
+
+        from app import generate_pdf_report
+        qd = rpt["questions_data"]
+        qs = [{"question": r["question"], "category": r.get("category", ""), "expected_keywords": []} for r in qd]
+        an = {i: r.get("answer", "") for i, r in enumerate(qd)}
+        sc = {i: {"score": r.get("score", 0), "correct": r.get("correct", False), "feedback": r.get("feedback", "")} for i, r in enumerate(qd)}
+        emotion_summary = {
+            "total_samples":    1,
+            "avg_confidence":   rpt.get("avg_confidence", 0),
+            "avg_anxiety":      rpt.get("avg_anxiety", 0),
+            "avg_composed":     rpt.get("avg_composed", 0),
+            "dominant_emotion": rpt.get("dominant_emotion", "Neutral"),
+            "overall_score":    rpt.get("emotion_behavioral_score", 50),
+            "assessment":       rpt.get("emotion_assessment", ""),
+        }
+        
+        # Pull anti-cheat flags
+        terminated_flag = rpt.get("terminated_due_to_cheating", False)
+        violations_count = rpt.get("violations_count", 0)
+        
+        return generate_pdf_report(
+            candidate_name=rpt.get("candidate_name", candidate_name),
+            job_title=rpt.get("job_title", ""),
+            company=rpt.get("company_name", ""),
+            questions=qs, answers=an, scores=sc,
+            completed_at=rpt.get("completed_at", ""),
+            emotion_summary=emotion_summary,
+            terminated_due_to_cheating=terminated_flag,
+            violations_count=violations_count,
+        )
+    except Exception:
+        return None
 
 
 # ===========================
@@ -311,6 +382,35 @@ def post_requirements_tab():
         unsafe_allow_html=True
     )
 
+    ALL_SKILLS = [
+        # Programming & Scripting
+        "Python", "JavaScript", "TypeScript", "Java", "C++", "C#", "Go", "Rust", "Ruby", "PHP", "Bash", "PowerShell",
+
+        # Web & Mobile Development
+        "React", "Vue", "Angular", "Next.js", "Node.js", "Django", "FastAPI", "Flask", "HTML", "CSS", "Swift", "Kotlin", "Flutter",
+
+        # Data Science, AI & Analytics
+        "TensorFlow", "PyTorch", "Scikit-learn", "Keras", "HuggingFace", "MLOps", "LangChain", "OpenCV", "NLP",
+        "Computer Vision", "Tableau", "Power BI", "Excel", "Spark", "Kafka", "Airflow", "dbt", "Pandas", "NumPy",
+
+        # Databases
+        "SQL", "NoSQL", "PostgreSQL", "MongoDB", "Redis", "Oracle", "MySQL", "Cassandra",
+
+        # Cloud, DevOps & Infrastructure
+        "AWS", "GCP", "Azure", "Docker", "Kubernetes", "Terraform", "Ansible", "Jenkins", "Linux", "Windows Server",
+        "Virtualization", "Networking", "VPN", "Firewalls",
+
+        # Cybersecurity
+        "Penetration Testing", "Encryption", "Identity Management", "Security Auditing", "Malware Analysis",
+        "Incident Response", "Compliance (HIPAA/GDPR)",
+
+        # Project Management & Soft Skills
+        "Git", "REST APIs", "GraphQL", "Microservices", "Agile / Scrum", "Project Management", "Leadership",
+        "Communication", "Technical Writing", "UX Design", "Figma", "SEO", "CRM (Salesforce/HubSpot)",
+        "Selenium", "QA Testing", "Postman", "JMeter", "CI/CD", "Wireframing", "Prototyping", "Adobe Creative Suite",
+        "Onboarding", "Employee Relations", "HRIS software", "Talent Acquisition"
+    ]
+
     # 🛑 YAHAN SE FORM SHURU
     with st.form("post_job_form"):
         st.markdown('<div class="profile-sec"><span class="ps-num">01</span><span class="ps-title">Role Information</span><span class="ps-desc">// the position</span></div>', unsafe_allow_html=True)
@@ -326,36 +426,6 @@ def post_requirements_tab():
             work_mode = st.selectbox("Work mode", ["On-site", "Remote", "Hybrid"], index=2, key="pr_work_mode")
         with col_d:
             location = st.text_input("Location (optional)", placeholder="e.g. Karachi, Remote-Global", key="pr_location")
-
-        ALL_SKILLS = [
-            # Programming & Scripting
-            "Python", "JavaScript", "TypeScript", "Java", "C++", "C#", "Go", "Rust", "Ruby", "PHP", "Bash", "PowerShell",
-            
-            # Web & Mobile Development
-            "React", "Vue", "Angular", "Next.js", "Node.js", "Django", "FastAPI", "Flask", "HTML", "CSS", "Swift", "Kotlin", "Flutter",
-            
-            # Data Science, AI & Analytics
-            "TensorFlow", "PyTorch", "Scikit-learn", "Keras", "HuggingFace", "MLOps", "LangChain", "OpenCV", "NLP", 
-            "Computer Vision", "Tableau", "Power BI", "Excel", "Spark", "Kafka", "Airflow", "dbt", "Pandas", "NumPy",
-            
-            # Databases
-            "SQL", "NoSQL", "PostgreSQL", "MongoDB", "Redis", "Oracle", "MySQL", "Cassandra",
-            
-            # Cloud, DevOps & Infrastructure
-            "AWS", "GCP", "Azure", "Docker", "Kubernetes", "Terraform", "Ansible", "Jenkins", "Linux", "Windows Server", 
-            "Virtualization", "Networking", "VPN", "Firewalls",
-            
-            # Cybersecurity
-            "Penetration Testing", "Encryption", "Identity Management", "Security Auditing", "Malware Analysis", 
-            "Incident Response", "Compliance (HIPAA/GDPR)",
-            
-            # Project Management & Soft Skills
-            "Git", "REST APIs", "GraphQL", "Microservices", "Agile / Scrum", "Project Management", "Leadership", 
-            "Communication", "Technical Writing", "UX Design", "Figma", "SEO", "CRM (Salesforce/HubSpot)",
-            "Selenium", "QA Testing", "Postman", "JMeter", "CI/CD", "Wireframing", "Prototyping", "Adobe Creative Suite",
-            "Onboarding", "Employee Relations", "HRIS software", "Talent Acquisition"
-        ]
-
 
         st.markdown('<div class="profile-sec"><span class="ps-num">02</span><span class="ps-title">Technical Requirements</span><span class="ps-desc">// core skills</span></div>', unsafe_allow_html=True)
         core_skills = st.multiselect("Core technical skills required", options=ALL_SKILLS, default=["Python", "SQL"], key="pr_core_skills")
@@ -441,18 +511,130 @@ def post_requirements_tab():
         st.markdown("""<div class="empty-state"><span class="es-icon"><i class="fa-regular fa-file-lines"></i></span><p>// no postings yet — use the form above</p></div>""", unsafe_allow_html=True)
     else:
         for p in postings:
-            skills_html = "".join(f'<span class="skill-tag">{s}</span>' for s in (p.get("core_skills") or []))
-            posted_date = p.get("posted_at", "")[:10] if p.get("posted_at") else "—"
+            job_key      = p.get("key", "")
+            job_status   = p.get("status", "active")
+            skills_html  = "".join(f'<span class="skill-tag">{s}</span>' for s in (p.get("core_skills") or []))
+            posted_date  = p.get("posted_at", "")[:10] if p.get("posted_at") else "—"
+            status_badge = (
+                '<span class="status-badge status-completed">● active</span>'
+                if job_status == "active"
+                else '<span class="status-badge status-cancelled">⊘ closed</span>'
+            )
+
             st.markdown(f"""
             <div class="job-card">
               <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.4rem;">
                 <div class="jc-title">{p.get("job_title","—")}</div>
-                <span class="status-badge status-completed">● active</span>
+                {status_badge}
               </div>
               <div class="jc-meta">{p.get("experience_level","—")} &nbsp;·&nbsp; {p.get("work_mode","—")} &nbsp;·&nbsp; {p.get("location") or "Location TBC"} &nbsp;·&nbsp; posted {posted_date}</div>
               <div style="margin-bottom:0.5rem;">{skills_html}</div>
             </div>
             """, unsafe_allow_html=True)
+
+            ecol1, ecol2, _ = st.columns([1, 1, 3], gap="small")
+            with ecol1:
+                if st.button("✏️ Edit", key=f"edit_btn_{job_key}", use_container_width=True):
+                    st.session_state[f"editing_job_{job_key}"] = not st.session_state.get(f"editing_job_{job_key}", False)
+            with ecol2:
+                toggle_label = "🔒 Close Posting" if job_status == "active" else "🔓 Reopen Posting"
+                if st.button(toggle_label, key=f"toggle_btn_{job_key}", use_container_width=True):
+                    new_status = "closed" if job_status == "active" else "active"
+                    with st.spinner("Updating..."):
+                        ok = toggle_job_posting_status(uid, job_key, new_status)
+                    if ok:
+                        st.success(f"✅ Posting {'closed — no longer visible to candidates' if new_status=='closed' else 'reopened'}.")
+                        time.sleep(0.6)
+                        st.rerun()
+
+            if st.session_state.get(f"editing_job_{job_key}", False):
+                st.markdown(
+                    f'<div class="confirm-card"><div class="cc-q">Editing: {p.get("job_title","—")}</div></div>',
+                    unsafe_allow_html=True
+                )
+                with st.form(f"edit_job_form_{job_key}"):
+                    ecol_a, ecol_b = st.columns(2, gap="medium")
+                    with ecol_a:
+                        e_job_title = st.text_input("Job title", value=p.get("job_title", ""), key=f"e_title_{job_key}")
+                    with ecol_b:
+                        e_exp_opts = ["Fresher", "Mid-Level", "Senior", "Lead / Principal", "Any"]
+                        e_exp_def = p.get("experience_level", "Mid-Level")
+                        e_exp_lvl = st.selectbox("Experience level required", e_exp_opts, index=e_exp_opts.index(e_exp_def) if e_exp_def in e_exp_opts else 1, key=f"e_exp_{job_key}")
+
+                    ecol_c, ecol_d = st.columns(2, gap="medium")
+                    with ecol_c:
+                        e_wm_opts = ["On-site", "Remote", "Hybrid"]
+                        e_wm_def = p.get("work_mode", "Hybrid")
+                        e_work_mode = st.selectbox("Work mode", e_wm_opts, index=e_wm_opts.index(e_wm_def) if e_wm_def in e_wm_opts else 2, key=f"e_wm_{job_key}")
+                    with ecol_d:
+                        e_location = st.text_input("Location (optional)", value=p.get("location", ""), key=f"e_loc_{job_key}")
+
+                    e_core_default = [s for s in (p.get("core_skills") or []) if s in ALL_SKILLS]
+                    e_core_skills = st.multiselect("Core technical skills required", options=ALL_SKILLS, default=e_core_default, key=f"e_core_{job_key}")
+                    e_nth_default = [s for s in (p.get("nice_to_have") or []) if s in ALL_SKILLS]
+                    e_nice_to_have = st.multiselect("Nice-to-have skills (optional)", options=[s for s in ALL_SKILLS if s not in e_core_skills], default=[s for s in e_nth_default if s not in e_core_skills], key=f"e_nth_{job_key}")
+
+                    ecol_e, ecol_f = st.columns(2, gap="medium")
+                    with ecol_e:
+                        e_min_clarity = st.slider("Minimum speech clarity threshold (%)", 0, 100, int(p.get("min_speech_clarity", 70)), 5, key=f"e_clarity_{job_key}")
+                    with ecol_f:
+                        e_min_score = st.slider("Minimum overall AI score (%)", 0, 100, int(p.get("min_score", 60)), 5, key=f"e_score_{job_key}")
+
+                    e_num_q_opts = list(range(5, 21))
+                    e_num_q_def = int(p.get("num_questions", 10))
+                    e_num_questions = st.select_slider("Number of interview questions", options=e_num_q_opts, value=e_num_q_def if e_num_q_def in e_num_q_opts else 10, key=f"e_numq_{job_key}")
+
+                    ecol_g, ecol_h = st.columns(2, gap="medium")
+                    with ecol_g:
+                        e_trait_opts = ["Analytical", "Collaborative", "Confident", "Creative", "Empathetic", "Leadership", "Results-Oriented", "Any"]
+                        e_trait_def = p.get("target_trait", "Analytical")
+                        e_target_trait = st.selectbox("Target dominant behavioral trait", e_trait_opts, index=e_trait_opts.index(e_trait_def) if e_trait_def in e_trait_opts else 0, key=f"e_trait_{job_key}")
+                    with ecol_h:
+                        e_it_opts = ["Technical", "HR", "Behavioral", "Mixed"]
+                        e_it_def = p.get("interview_type", "Mixed")
+                        e_interview_type = st.selectbox("Interview type", e_it_opts, index=e_it_opts.index(e_it_def) if e_it_def in e_it_opts else 3, key=f"e_type_{job_key}")
+
+                    e_job_description = st.text_area("Full job description", value=p.get("job_description", ""), height=140, key=f"e_desc_{job_key}")
+
+                    esave_col, ecancel_col, _ = st.columns([1, 1, 3])
+                    with esave_col:
+                        save_edit = st.form_submit_button("💾 Save Changes", use_container_width=True)
+                    with ecancel_col:
+                        cancel_edit = st.form_submit_button("Cancel", use_container_width=True)
+
+                if save_edit:
+                    if not e_job_title.strip():
+                        st.error("❌ Job title is required.")
+                    elif not e_core_skills:
+                        st.error("❌ Select at least one core skill.")
+                    else:
+                        updated_payload = {
+                            "job_title":          e_job_title.strip(),
+                            "experience_level":   e_exp_lvl,
+                            "work_mode":          e_work_mode,
+                            "location":           e_location.strip(),
+                            "core_skills":        e_core_skills,
+                            "nice_to_have":       e_nice_to_have,
+                            "min_speech_clarity": e_min_clarity,
+                            "min_score":          e_min_score,
+                            "target_trait":       e_target_trait,
+                            "interview_type":     e_interview_type,
+                            "num_questions":      e_num_questions,
+                            "job_description":    e_job_description.strip(),
+                        }
+                        with themed_loader("Saving changes..."):
+                            ok = update_job_posting(uid, job_key, updated_payload)
+                        if ok:
+                            st.session_state[f"editing_job_{job_key}"] = False
+                            st.success("✅ Job posting updated!")
+                            time.sleep(0.6)
+                            st.rerun()
+
+                if cancel_edit:
+                    st.session_state[f"editing_job_{job_key}"] = False
+                    st.rerun()
+
+            st.markdown('<div style="height:0.4rem;"></div>', unsafe_allow_html=True)
 
 
 # ===========================
@@ -461,6 +643,9 @@ def post_requirements_tab():
 
 def incoming_applications_tab():
     uid = st.session_state.user_uid
+    rec_profile = load_recruiter_profile(uid)
+    company_name = rec_profile.get("company_name", "") or st.session_state.user_name
+    recruiter_display_name = st.session_state.user_name
 
     top_l, top_r = st.columns([5, 1])
     with top_r:
@@ -507,7 +692,7 @@ def incoming_applications_tab():
             )
         with f3:
             sort_order = st.selectbox("Sort by", ["Newest first", "Oldest first", "Name A–Z"], key="rec_app_sort")
-            
+
         submit_filters = st.form_submit_button("🔍 Apply Filters")
 
     filtered = [
@@ -542,11 +727,7 @@ def incoming_applications_tab():
         cand_name   = app.get("candidate_name", "—")
         job_title   = app.get("job_title", "—")
 
-        # Existing Variables
         status      = app.get("status", "Applied")
-        app_key     = app.get("key", "")
-        cand_name   = app.get("candidate_name", "—")
-        job_title   = app.get("job_title", "—")
         applied_str = app.get("applied_at", "")[:10] if app.get("applied_at") else "—"
         last_change = app.get("last_status_change", "")[:10] if app.get("last_status_change") else "—"
         has_report  = app.get("has_report", False)
@@ -630,20 +811,34 @@ def incoming_applications_tab():
             st.markdown(
                 f'<div style="font-family:\'DM Mono\',monospace;font-size:0.68rem;color:var(--text-muted);'
                 f'padding:0.4rem 0 0.6rem;letter-spacing:0.3px;">'
-                f'// auto-rejected — score below minimum threshold</div>',
+                f'// auto-rejected — score below minimum threshold — rejection email auto-sent</div>',
                 unsafe_allow_html=True,
             )
 
+        # ===========================
+        # ACCEPT (application stage) — invite to AI interview, no PDF
+        # ===========================
         if st.session_state.get(f"action_{app_key}") == "accept":
+            candidate_email = get_candidate_email(cand_uid)
+            default_subject, default_body = application_accepted_email(
+                cand_name, job_title, company_name, recruiter_display_name
+            )
             st.markdown(
                 f'<div class="confirm-card"><div class="cc-q">Accept <strong>{cand_name}</strong> for <strong>{job_title}</strong>?<br>'
                 f'<span style="font-family:\'DM Mono\',monospace;font-size:0.7rem;color:var(--text-muted);">'
                 f'// they will receive a 48-hour window to complete the AI interview</span></div></div>',
                 unsafe_allow_html=True
             )
+            if not candidate_email:
+                st.warning("⚠️ No email address found for this candidate — status will update but no email will be sent.")
+            else:
+                st.caption(f"📧 Sending to: {candidate_email}")
+            edited_subject = st.text_input("Email subject", value=default_subject, key=f"accept_subj_{app_key}")
+            edited_body = st.text_area("Email message (edit if needed)", value=default_body, height=200, key=f"accept_body_{app_key}")
+
             ca1, ca2, _ = st.columns([1, 1, 4])
             with ca1:
-                if st.button("Yes, Accept", key=f"yes_accept_{app_key}_{idx}", use_container_width=True):
+                if st.button("Yes, Accept & Send Email", key=f"yes_accept_{app_key}_{idx}", use_container_width=True):
                     deadline = (datetime.utcnow() + timedelta(hours=48)).isoformat()
                     with st.spinner("Updating..."):
                         ok = update_application_status(
@@ -652,6 +847,16 @@ def incoming_applications_tab():
                             new_status="Interview Scheduled", interview_deadline=deadline
                         )
                     if ok:
+                        if candidate_email:
+                            sent, msg = send_email(
+                                to_email=candidate_email,
+                                subject=edited_subject,
+                                body=edited_body,
+                                reply_to=st.session_state.user_email,
+                                sender_display_name=f"{recruiter_display_name} ({company_name})",
+                            )
+                            if not sent:
+                                st.warning(f"⚠️ Status updated, but email failed: {msg}")
                         st.session_state.pop(f"action_{app_key}", None)
                         st.success(f"✅ {cand_name} accepted! 48-hour interview window starts now.")
                         time.sleep(0.6)
@@ -661,7 +866,14 @@ def incoming_applications_tab():
                     st.session_state.pop(f"action_{app_key}", None)
                     st.rerun()
 
+        # ===========================
+        # REJECT (application stage) — no PDF, no interview happened yet
+        # ===========================
         if st.session_state.get(f"action_{app_key}") == "reject":
+            candidate_email = get_candidate_email(cand_uid)
+            default_subject, default_body = application_rejected_email(
+                cand_name, job_title, company_name, recruiter_display_name
+            )
             st.markdown(
                 f'<div class="confirm-card" style="border-color:rgba(239,68,68,0.25);">'
                 f'<div class="cc-q" style="color:#dc2626;">Reject <strong>{cand_name}</strong> for <strong>{job_title}</strong>?<br>'
@@ -669,9 +881,16 @@ def incoming_applications_tab():
                 f'// candidate will see "Rejected" on their dashboard</span></div></div>',
                 unsafe_allow_html=True
             )
+            if not candidate_email:
+                st.warning("⚠️ No email address found for this candidate — status will update but no email will be sent.")
+            else:
+                st.caption(f"📧 Sending to: {candidate_email}")
+            edited_subject = st.text_input("Email subject", value=default_subject, key=f"reject_subj_{app_key}")
+            edited_body = st.text_area("Email message (edit if needed)", value=default_body, height=200, key=f"reject_body_{app_key}")
+
             cr1, cr2, _ = st.columns([1, 1, 4])
             with cr1:
-                if st.button("Yes, Reject", key=f"yes_reject_{app_key}_{idx}", use_container_width=True):
+                if st.button("Yes, Reject & Send Email", key=f"yes_reject_{app_key}_{idx}", use_container_width=True):
                     with st.spinner("Updating..."):
                         ok = update_application_status(
                             candidate_uid=cand_uid, app_key=cand_app_key,
@@ -679,6 +898,16 @@ def incoming_applications_tab():
                             new_status="Rejected"
                         )
                     if ok:
+                        if candidate_email:
+                            sent, msg = send_email(
+                                to_email=candidate_email,
+                                subject=edited_subject,
+                                body=edited_body,
+                                reply_to=st.session_state.user_email,
+                                sender_display_name=f"{recruiter_display_name} ({company_name})",
+                            )
+                            if not sent:
+                                st.warning(f"⚠️ Status updated, but email failed: {msg}")
                         st.session_state.pop(f"action_{app_key}", None)
                         st.warning(f"❌ {cand_name}'s application for {job_title} has been rejected.")
                         time.sleep(0.6)
@@ -688,19 +917,33 @@ def incoming_applications_tab():
                     st.session_state.pop(f"action_{app_key}", None)
                     st.rerun()
 
+        # ===========================
+        # HIRE (post-interview stage) — with PDF report attached
+        # ===========================
         if st.session_state.get(f"action_{app_key}") == "hire":
+            candidate_email = get_candidate_email(cand_uid)
+            default_subject, default_body = interview_hired_email(
+                cand_name, job_title, company_name, recruiter_display_name
+            )
             st.markdown(
                 f'<div class="confirm-card" style="border-color:rgba(5,150,105,0.25);">'
                 f'<div class="cc-q">Hire <strong>{cand_name}</strong> for <strong>{job_title}</strong>?<br>'
                 f'<span style="font-family:\'DM Mono\',monospace;font-size:0.7rem;color:var(--text-muted);">'
-                f'// candidate will be notified on their dashboard</span></div></div>',
+                f'// candidate will be notified on their dashboard and by email with their report attached</span></div></div>',
                 unsafe_allow_html=True,
             )
+            if not candidate_email:
+                st.warning("⚠️ No email address found for this candidate — status will update but no email will be sent.")
+            else:
+                st.caption(f"📧 Sending to: {candidate_email} (PDF report attached)")
+            edited_subject = st.text_input("Email subject", value=default_subject, key=f"hire_subj_{app_key}")
+            edited_body = st.text_area("Email message (edit if needed)", value=default_body, height=220, key=f"hire_body_{app_key}")
+
             ch1, ch2, _ = st.columns([1, 1, 4])
             with ch1:
-                if st.button("Yes, Hire", key=f"yes_hire_{app_key}_{idx}", use_container_width=True):
+                if st.button("Yes, Hire & Send Email", key=f"yes_hire_{app_key}_{idx}", use_container_width=True):
                     from reports.post_interview import hire_message
-                    company = app.get("company_name", "")
+                    company = app.get("company_name", "") or company_name
                     with st.spinner("Updating..."):
                         ok = update_application_status(
                             candidate_uid=cand_uid, app_key=cand_app_key,
@@ -709,6 +952,19 @@ def incoming_applications_tab():
                             status_message=hire_message(job_title, company),
                         )
                     if ok:
+                        if candidate_email:
+                            pdf_bytes = _build_report_pdf_for_candidate(cand_uid, cand_app_key, cand_name)
+                            sent, msg = send_email(
+                                to_email=candidate_email,
+                                subject=edited_subject,
+                                body=edited_body,
+                                pdf_bytes=pdf_bytes,
+                                pdf_filename=f"InterviewAI_{cand_name.replace(' ','_')}_Report.pdf",
+                                reply_to=st.session_state.user_email,
+                                sender_display_name=f"{recruiter_display_name} ({company_name})",
+                            )
+                            if not sent:
+                                st.warning(f"⚠️ Status updated, but email failed: {msg}")
                         st.session_state.pop(f"action_{app_key}", None)
                         st.success(f"✅ {cand_name} has been hired for {job_title}!")
                         time.sleep(0.6)
@@ -718,17 +974,31 @@ def incoming_applications_tab():
                     st.session_state.pop(f"action_{app_key}", None)
                     st.rerun()
 
+        # ===========================
+        # REJECT (post-interview stage) — with PDF report attached
+        # ===========================
         if st.session_state.get(f"action_{app_key}") == "reject_decision":
+            candidate_email = get_candidate_email(cand_uid)
+            default_subject, default_body = interview_rejected_email(
+                cand_name, job_title, company_name, recruiter_display_name
+            )
             st.markdown(
                 f'<div class="confirm-card" style="border-color:rgba(239,68,68,0.25);">'
                 f'<div class="cc-q" style="color:#dc2626;">Reject <strong>{cand_name}</strong> for <strong>{job_title}</strong>?<br>'
                 f'<span style="font-family:\'DM Mono\',monospace;font-size:0.7rem;color:var(--text-muted);">'
-                f'// candidate will see a rejection message on their dashboard</span></div></div>',
+                f'// candidate will see a rejection message on their dashboard and receive their report by email</span></div></div>',
                 unsafe_allow_html=True,
             )
+            if not candidate_email:
+                st.warning("⚠️ No email address found for this candidate — status will update but no email will be sent.")
+            else:
+                st.caption(f"📧 Sending to: {candidate_email} (PDF report attached)")
+            edited_subject = st.text_input("Email subject", value=default_subject, key=f"reject_dec_subj_{app_key}")
+            edited_body = st.text_area("Email message (edit if needed)", value=default_body, height=220, key=f"reject_dec_body_{app_key}")
+
             crd1, crd2, _ = st.columns([1, 1, 4])
             with crd1:
-                if st.button("Yes, Reject", key=f"yes_reject_decision_{app_key}_{idx}", use_container_width=True):
+                if st.button("Yes, Reject & Send Email", key=f"yes_reject_decision_{app_key}_{idx}", use_container_width=True):
                     from reports.post_interview import manual_reject_message
                     with st.spinner("Updating..."):
                         ok = update_application_status(
@@ -738,6 +1008,19 @@ def incoming_applications_tab():
                             status_message=manual_reject_message(job_title),
                         )
                     if ok:
+                        if candidate_email:
+                            pdf_bytes = _build_report_pdf_for_candidate(cand_uid, cand_app_key, cand_name)
+                            sent, msg = send_email(
+                                to_email=candidate_email,
+                                subject=edited_subject,
+                                body=edited_body,
+                                pdf_bytes=pdf_bytes,
+                                pdf_filename=f"InterviewAI_{cand_name.replace(' ','_')}_Report.pdf",
+                                reply_to=st.session_state.user_email,
+                                sender_display_name=f"{recruiter_display_name} ({company_name})",
+                            )
+                            if not sent:
+                                st.warning(f"⚠️ Status updated, but email failed: {msg}")
                         st.session_state.pop(f"action_{app_key}", None)
                         st.warning(f"❌ {cand_name}'s application for {job_title} has been rejected.")
                         time.sleep(0.6)
@@ -814,21 +1097,42 @@ def interview_reports_hub_tab():
     pdf_url          = report.get("pdf_report_url", "")
     completed_at     = report.get("completed_at", "")[:10] if report.get("completed_at") else "—"
 
-    score_color = "#059669" if overall_score >= 75 else ("#d97706" if overall_score >= 55 else "#ef4444")
-    st.markdown(f"""
-    <div class="ml-card" style="margin-bottom:1.2rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
-      <div>
-        <div style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:0.3rem;">// overall ai score</div>
-        <div style="font-family:'Sora',sans-serif;font-size:2.8rem;font-weight:800;color:{score_color};letter-spacing:-2px;line-height:1;">
-          {overall_score}<span style="font-size:1.4rem;color:var(--text-muted);">/100</span>
+    # Add terminated check here
+    terminated_flag = report.get("terminated_due_to_cheating", False)
+    
+    if terminated_flag:
+        score_color = "#dc2626"
+        overall_score = 0
+        st.markdown(f"""
+        <div class="ml-card" style="margin-bottom:1.2rem;border-left: 4px solid #dc2626; display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+          <div>
+            <div style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:0.3rem;">// overall ai score (TERMINATED)</div>
+            <div style="font-family:'Sora',sans-serif;font-size:2.8rem;font-weight:800;color:{score_color};letter-spacing:-2px;line-height:1;">
+              {overall_score}<span style="font-size:1.4rem;color:var(--text-muted);">/100</span>
+            </div>
+            <div style="font-family:'DM Mono',monospace;font-size:0.68rem;color:var(--text-muted);margin-top:4px;letter-spacing:0.3px;">completed: {completed_at}</div>
+          </div>
+          <div style="font-family:'DM Mono',monospace;font-size:0.7rem;color:var(--text-muted);text-align:right;letter-spacing:0.5px;">
+            🚨 INTERVIEW TERMINATED FOR RULE VIOLATIONS<br>// Candidate switched tabs or exited fullscreen
+          </div>
         </div>
-        <div style="font-family:'DM Mono',monospace;font-size:0.68rem;color:var(--text-muted);margin-top:4px;letter-spacing:0.3px;">completed: {completed_at}</div>
-      </div>
-      <div style="font-family:'DM Mono',monospace;font-size:0.7rem;color:var(--text-muted);text-align:right;letter-spacing:0.5px;">
-        composite of speech · emotion · technical<br>// powered by gemini + deepface + audio analysis
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+    else:
+        score_color = "#059669" if overall_score >= 75 else ("#d97706" if overall_score >= 55 else "#ef4444")
+        st.markdown(f"""
+        <div class="ml-card" style="margin-bottom:1.2rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+          <div>
+            <div style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:0.3rem;">// overall ai score</div>
+            <div style="font-family:'Sora',sans-serif;font-size:2.8rem;font-weight:800;color:{score_color};letter-spacing:-2px;line-height:1;">
+              {overall_score}<span style="font-size:1.4rem;color:var(--text-muted);">/100</span>
+            </div>
+            <div style="font-family:'DM Mono',monospace;font-size:0.68rem;color:var(--text-muted);margin-top:4px;letter-spacing:0.3px;">completed: {completed_at}</div>
+          </div>
+          <div style="font-family:'DM Mono',monospace;font-size:0.7rem;color:var(--text-muted);text-align:right;letter-spacing:0.5px;">
+            composite of speech · emotion · technical<br>// powered by gemini + deepface + audio analysis
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown('<div class="section-heading">Download evaluation report</div>', unsafe_allow_html=True)
@@ -880,6 +1184,10 @@ def interview_reports_hub_tab():
                 "overall_score":   rpt_fetched.get("emotion_behavioral_score", 50),
                 "assessment":      rpt_fetched.get("emotion_assessment", ""),
             }
+            # Pass flags to generator
+            terminated_flag = rpt_fetched.get("terminated_due_to_cheating", False)
+            violations_count = rpt_fetched.get("violations_count", 0)
+
             try:
                 pdf_bytes_rec = generate_pdf_report(
                     candidate_name=rpt_fetched.get("candidate_name", selected_name),
@@ -888,6 +1196,8 @@ def interview_reports_hub_tab():
                     questions=qs, answers=an, scores=sc,
                     completed_at=rpt_fetched.get("completed_at",""),
                     emotion_summary=emotion_summary_rec,
+                    terminated_due_to_cheating=terminated_flag,
+                    violations_count=violations_count
                 )
                 st.download_button(
                     "⬇️  Download PDF Report", data=pdf_bytes_rec,

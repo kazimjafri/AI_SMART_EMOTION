@@ -824,35 +824,57 @@ def application_history_tab():
             from app import generate_pdf_report  # local import to avoid circular
             btn_cols = st.columns(len(actions) + 3, gap="small")
             col_ptr = 0
+            
             if "withdraw" in actions:
                 with btn_cols[col_ptr]:
                     if st.button("Withdraw", key=f"withdraw_{app_key}_{idx}", use_container_width=True):
                         st.session_state[f"confirm_withdraw_{app_key}"] = True
                 col_ptr += 1
+                
             if "start_interview" in actions:
                 with btn_cols[col_ptr]:
-                    if st.button("🎤 Start Interview", key=f"start_int_{app_key}_{idx}", use_container_width=True):
+                    # --- PROCTORING RULES UI & CONSENT CHECKBOX ---
+                    st.markdown("""
+                    <div style="background: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 10px; margin-bottom: 10px;">
+                        <strong style="color: #ef4444; font-size: 0.85rem;">⚠️ Interview Rules & Regulations:</strong>
+                        <ul style="font-size: 0.75rem; color: var(--text-body); margin-top: 5px; padding-left: 20px;">
+                            <li>The interview will be forced into <b>Fullscreen Mode</b>.</li>
+                            <li><b>Do not switch tabs or exit fullscreen</b> during the interview.</li>
+                            <li><b>1st Violation:</b> You will receive a strict warning.</li>
+                            <li><b>2nd Violation:</b> Interview will be terminated and flagged.</li>
+                        </ul>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    consent_key = f"consent_{app_key}"
+                    consent = st.checkbox("I have read and agree to all instructions", key=consent_key)
+                    
+                    if st.button("🎤 Start Interview", key=f"start_int_{app_key}_{idx}", use_container_width=True, disabled=not consent):
                     
                         st.session_state.job_interview_context = {
-                        "job_id":             app.get("job_id", ""),
-                        "job_title":          job_title,
-                        "company_name":       company,
-                        "job_description":    app.get("job_description", ""),
-                        "core_skills":        app.get("core_skills", []),
-                        "min_speech_clarity": app.get("min_speech_clarity", 60),
-                        "min_score":          app.get("min_score", 60),
-                        "num_questions":      app.get("num_questions", 10),
-                        "interview_type":     app.get("interview_type", "Mixed"),
-                        "experience_level":   app.get("experience_level", "Mid"),
-                        "app_key":            app_key,
-                        "recruiter_uid":      recruiter_uid,
-                    }
+                            "job_id":             app.get("job_id", ""),
+                            "job_title":          job_title,
+                            "company_name":       company,
+                            "job_description":    app.get("job_description", ""),
+                            "core_skills":        app.get("core_skills", []),
+                            "min_speech_clarity": app.get("min_speech_clarity", 60),
+                            "min_score":          app.get("min_score", 60),
+                            "num_questions":      app.get("num_questions", 10),
+                            "interview_type":     app.get("interview_type", "Mixed"),
+                            "experience_level":   app.get("experience_level", "Mid"),
+                            "app_key":            app_key,
+                            "recruiter_uid":      recruiter_uid,
+                        }
+                        # Initialize anti-cheat trackers
+                        st.session_state.iv2_violations = 0
+                        st.session_state.terminated_due_to_cheating = False
                         
-                        st.success(f"✅ Interview context loaded for {job_title}. Launching...")
+                        st.success(f"✅ Context loaded for {job_title}. Launching...")
                         time.sleep(0.6)
                         from app import navigate_to
                         navigate_to("interview")
                 col_ptr += 1
+                
             if "download_report" in actions:
                 with btn_cols[col_ptr]:
                     try:
@@ -871,6 +893,10 @@ def application_history_tab():
                                 "overall_score":   rpt.get("emotion_behavioral_score", 50),
                                 "assessment":      rpt.get("emotion_assessment", ""),
                             }
+                            # Pass flags for PDF generation
+                            terminated_flag = rpt.get("terminated_due_to_cheating", False)
+                            violations_count = rpt.get("violations_count", 0)
+                            
                             pdf_bytes_inline = generate_pdf_report(
                                 candidate_name=rpt.get("candidate_name", st.session_state.user_name),
                                 job_title=rpt.get("job_title",""),
@@ -878,6 +904,8 @@ def application_history_tab():
                                 questions=qs, answers=an, scores=sc,
                                 completed_at=rpt.get("completed_at",""),
                                 emotion_summary=emotion_summary_dl,
+                                terminated_due_to_cheating=terminated_flag,
+                                violations_count=violations_count,
                             )
                             st.download_button(
                                 "⬇️ Download Report", data=pdf_bytes_inline,
@@ -920,17 +948,8 @@ def application_history_tab():
 # ===========================
 # FAKE JOB VERIFIER TAB
 # ===========================
-
+# (Your original fake_job_verifier_tab() function remains exactly the same below...)
 def fake_job_verifier_tab():
-    """Lets the candidate paste a job link + description and check
-    whether it looks like a fake/scam posting, using the trained
-    Logistic Regression model.
-
-    Wrapped in st.form so that typing/pasting into the fields does
-    NOT trigger a script rerun (and therefore no computation/freeze)
-    — the check only runs when "Check Authenticity" is clicked.
-    """
-
     st.markdown('<div class="section-heading">🔍 Verify Job Posting</div>', unsafe_allow_html=True)
     st.markdown(
         '<p style="color:var(--text-muted);font-family:\'DM Mono\',monospace;font-size:0.8rem;">'
@@ -1000,11 +1019,9 @@ def fake_job_verifier_tab():
                 "always verify independently before sharing personal or financial information."
             )
 
-
 # ===========================
 # CANDIDATE DASHBOARD (main entry)
 # ===========================
-
 def render_candidate_dashboard():
     """Main candidate dashboard — called from app.py."""
     st.markdown(f"""

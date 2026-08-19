@@ -910,6 +910,8 @@ def generate_pdf_report(
     scores: dict,
     completed_at: str,
     emotion_summary: dict = None,
+    terminated_due_to_cheating: bool = False,
+    violations_count: int = 0
 ) -> bytes:
     """
     Thin wrapper kept for backward compatibility (candidate.py and
@@ -928,6 +930,8 @@ def generate_pdf_report(
         scores=scores,
         completed_at=completed_at,
         emotion_summary=emotion_summary,
+        terminated_due_to_cheating=terminated_due_to_cheating,
+        violations_count=violations_count
     )
 
 

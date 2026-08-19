@@ -12,6 +12,7 @@ import json
 from dotenv import load_dotenv
 from datetime import datetime
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration, VideoHTMLAttributes
+import streamlit.components.v1 as components
 
 load_dotenv()
 
@@ -61,22 +62,18 @@ def _reset_interview():
     for k in _KEYS.values():
         if k in st.session_state:
             del st.session_state[k]
-
+    if "iv2_violations" in st.session_state:
+        del st.session_state["iv2_violations"]
+    if "terminated_due_to_cheating" in st.session_state:
+        del st.session_state["terminated_due_to_cheating"]
 
 # ───────────────────────────────────────────
-# BROWSER CAMERA WIDGET  (asks for permission)
-# Uses a FIXED key so the same connection persists across
-# reruns while we're in the briefing/question phases — the
-# candidate is only ever asked for permission once per session.
+# BROWSER CAMERA WIDGET
 # ───────────────────────────────────────────
 
 _RTC_CONFIG = RTCConfiguration({
     "iceServers": [
         {"urls": ["stun:stun.l.google.com:19302"]},
-        # TURN relay fallback — needed on networks with strict NAT/firewalls
-        # (college wifi, mobile hotspots, some ISPs) where STUN alone can't
-        # establish a direct connection, causing the "taking longer than
-        # expected" / stuck-connecting error.
         {
             "urls": [
                 "turn:openrelay.metered.ca:80",
@@ -89,13 +86,7 @@ _RTC_CONFIG = RTCConfiguration({
     ]
 })
 
-
 def _get_webrtc_ctx():
-    """
-    Renders the camera widget with restricted size and layout control.
-    Uses CSS to ensure the widget stays compact and prevents duplicate key errors.
-    """
-    # CSS injection to limit camera container size and ensure layout consistency
     st.markdown("""
         <style>
         [data-testid="stWebRTC"] {
@@ -107,13 +98,6 @@ def _get_webrtc_ctx():
     """, unsafe_allow_html=True)
     
     try:
-        # Optimized constraints: Resolution set to 400x300 for better performance
-        # on laptop hardware and to keep the camera widget compact.
-        # NOTE: audio is intentionally NOT requested here — the candidate's answer
-        # is now recorded via st.audio_input (native browser recorder), completely
-        # separate from this camera/video pipeline. This avoids CPU contention
-        # between DeepFace/object-detection inference and audio capture, which
-        # was previously causing choppy/dropped speech.
         return webrtc_streamer(
             key="iv2_camera",
             mode=WebRtcMode.SENDRECV,
@@ -134,21 +118,13 @@ def _get_webrtc_ctx():
             ),
         )
     except Exception as e:
-        st.error(
-            "⚠️ Camera component failed to load. Make sure `streamlit-webrtc` "
-            f"and `av` are installed. ({e})"
-        )
+        st.error(f"⚠️ Camera component failed to load. ({e})")
         return None
-
 
 def _camera_ready(webrtc_ctx) -> bool:
     return bool(webrtc_ctx and webrtc_ctx.state.playing and webrtc_ctx.video_processor)
 
-
 def _render_object_alert_banner(webrtc_ctx):
-    """Show the object-detection alert BELOW the camera as a normal Streamlit
-    element (full width, never gets cut off) instead of drawn on the small
-    video frame itself."""
     if not (webrtc_ctx and webrtc_ctx.video_processor):
         return
     try:
@@ -158,37 +134,18 @@ def _render_object_alert_banner(webrtc_ctx):
     if alert:
         st.error(f"⚠️ Object detected: **{', '.join(alert).upper()}** — please remove it from view.")
 
-
 @st.fragment(run_every=1.5)
 def _render_object_alert_fragment(webrtc_ctx):
-    """Auto-refreshing wrapper around _render_object_alert_banner.
-
-    This fragment re-runs itself on its own 1.5s timer, independent of the
-    rest of the page — so the alert now appears AND clears live, without
-    waiting on a full st.rerun() from some unrelated button click. Only this
-    small banner is inside the fragment; the webrtc_streamer camera call
-    stays outside it in render_interview_page(), so the camera is never
-    remounted/duplicated by this fragment's own refresh cycle."""
     _render_object_alert_banner(webrtc_ctx)
 
 
 # ───────────────────────────────────────────
-# QUESTION GENERATION  (Gemini / fallback)
+# QUESTION GENERATION
 # ───────────────────────────────────────────
-
-# ───────────────────────────────────────────
-# QUESTION GENERATION  (Updated to use recruiter-defined num_questions)
-# ───────────────────────────────────────────
-
 def _generate_questions(profile: dict, job_ctx: dict) -> list:
-    """
-    Generate interview questions tailored to candidate profile + job context.
-    Uses recruiter-defined 'num_questions' from job_ctx.
-    """
-
     job_title    = job_ctx.get("job_title", "General Role")
     company      = job_ctx.get("company_name", "")
-    num_q        = job_ctx.get("num_questions", 10) # if no. of questions not specified, default to 10
+    num_q        = job_ctx.get("num_questions", 10)
     job_desc     = job_ctx.get("job_description", "")
     core_skills  = job_ctx.get("core_skills", [])
     int_type     = job_ctx.get("interview_type", "Mixed")
@@ -196,7 +153,6 @@ def _generate_questions(profile: dict, job_ctx: dict) -> list:
     exp_level    = job_ctx.get("experience_level", "Mid")
     candidate_skills = profile.get("primary_skills", "")
     
-
     prompt = f"""You are an expert technical interviewer. Generate exactly {num_q} interview questions.
 
 Role: {job_title}
@@ -225,17 +181,14 @@ Respond ONLY with a valid JSON array (no markdown):
 
     try:
         api_key = os.environ.get("GEMINI_API_KEY", "")    
-        if not api_key:
-            raise ValueError("No API Key found in .env")
+        if not api_key: raise ValueError("No API Key found")
 
         import google.generativeai as genai_sdk
-        import json
         genai_sdk.configure(api_key=api_key)
         model    = genai_sdk.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         raw      = response.text.strip()
 
-        # Clean potential markdown if Gemini ignores instructions
         if raw.startswith("```"):
             parts = raw.split("```")
             raw   = parts[1] if len(parts) > 1 else raw
@@ -244,302 +197,74 @@ Respond ONLY with a valid JSON array (no markdown):
 
         questions = json.loads(raw.strip())
         if isinstance(questions, list) and questions:
-            # Recruiter ke number ke mutabiq slice
             return questions[:num_q]
         raise ValueError("Empty result")
 
     except Exception:
-        # Fallback mein bhi num_q use karein
         return _fallback_questions(job_title, company, core_skills, int_type, num_q)
 
-
 def _fallback_questions(job_title, company, core_skills, int_type, num_q) -> list:
-    """Curated fallback question bank."""
     skills_str = ", ".join(core_skills[:3]) if core_skills else "relevant technologies"
-
     bank = {
         "Technical": [
-            {"question": f"Explain how you would architect a scalable system for {job_title} tasks. Walk me through your design decisions.",
-             "category": "Technical", "expected_keywords": ["scalable", "architecture", "design", "system"]},
-            {"question": f"How do you approach debugging a critical production issue? Describe your process step by step.",
-             "category": "Technical", "expected_keywords": ["debug", "logs", "reproduce", "fix", "monitor"]},
-            {"question": f"Describe your experience with {skills_str}. Give a specific example of a project where you used these.",
-             "category": "Technical", "expected_keywords": ["experience", "project", "implement", "solution"]},
-            {"question": "What is the difference between synchronous and asynchronous programming? When would you choose each?",
-             "category": "Technical", "expected_keywords": ["async", "sync", "blocking", "non-blocking", "performance"]},
-            {"question": "How do you ensure code quality in your projects? What practices do you follow?",
-             "category": "Technical", "expected_keywords": ["testing", "review", "clean code", "documentation", "CI"]},
-            {"question": "Explain a complex technical concept you recently learned and how you applied it.",
-             "category": "Technical", "expected_keywords": ["learn", "apply", "concept", "implementation"]},
-            {"question": "How do you handle performance bottlenecks in an application?",
-             "category": "Technical", "expected_keywords": ["profiling", "optimize", "cache", "database", "bottleneck"]},
+            {"question": f"Explain how you would architect a scalable system for {job_title} tasks.", "category": "Technical", "expected_keywords": ["scalable", "architecture"]},
+            {"question": "How do you approach debugging a critical production issue?", "category": "Technical", "expected_keywords": ["debug", "logs", "monitor"]},
+            {"question": f"Describe your experience with {skills_str}.", "category": "Technical", "expected_keywords": ["experience", "project", "implement"]},
         ],
         "Behavioral": [
-            {"question": "Tell me about a time you had a disagreement with a teammate. How did you resolve it?",
-             "category": "Behavioral", "expected_keywords": ["conflict", "communicate", "resolve", "team", "outcome"]},
-            {"question": "Describe a project where you had to learn something new under a tight deadline. How did you manage?",
-             "category": "Behavioral", "expected_keywords": ["learn", "deadline", "manage", "prioritize", "outcome"]},
-            {"question": "Give an example of when you took ownership of a problem beyond your assigned responsibilities.",
-             "category": "Behavioral", "expected_keywords": ["ownership", "initiative", "problem", "result", "impact"]},
-            {"question": "Tell me about a time you failed at something. What did you learn from it?",
-             "category": "Behavioral", "expected_keywords": ["failure", "learn", "improve", "reflect", "change"]},
-            {"question": "How do you prioritize when you have multiple urgent tasks competing for your time?",
-             "category": "Behavioral", "expected_keywords": ["prioritize", "organize", "deadline", "communication", "manage"]},
+            {"question": "Tell me about a time you had a disagreement with a teammate.", "category": "Behavioral", "expected_keywords": ["conflict", "communicate", "resolve"]},
+            {"question": "Give an example of when you took ownership of a problem.", "category": "Behavioral", "expected_keywords": ["ownership", "initiative", "result"]},
         ],
         "HR": [
-            {"question": f"Why are you interested in the {job_title} role at {company}?",
-             "category": "HR", "expected_keywords": ["interest", "growth", "skills", "company", "role"]},
-            {"question": "Where do you see yourself professionally in the next 3 to 5 years?",
-             "category": "HR", "expected_keywords": ["goal", "growth", "career", "develop", "leadership"]},
-            {"question": "What is your greatest professional strength and how does it make you effective in your work?",
-             "category": "HR", "expected_keywords": ["strength", "effective", "skill", "impact", "example"]},
-            {"question": "How do you stay up to date with the latest trends and developments in your field?",
-             "category": "HR", "expected_keywords": ["learn", "read", "courses", "community", "practice"]},
-            {"question": "Describe your ideal work environment and team culture.",
-             "category": "HR", "expected_keywords": ["collaborate", "culture", "team", "environment", "communicate"]},
+            {"question": f"Why are you interested in the {job_title} role at {company}?", "category": "HR", "expected_keywords": ["interest", "growth", "skills"]},
+            {"question": "Where do you see yourself professionally in the next 3 to 5 years?", "category": "HR", "expected_keywords": ["goal", "career", "develop"]},
         ],
     }
-
     import random
+    pool = []
     if int_type == "Mixed":
-        pool = []
-        for t in ["Technical", "Behavioral", "HR"]:
-            pool.extend(bank[t])
+        for t in ["Technical", "Behavioral", "HR"]: pool.extend(bank[t])
     else:
         pool = bank.get(int_type, bank["Technical"])
 
     random.shuffle(pool)
     return pool[:num_q]
 
-
 # ───────────────────────────────────────────
-# CSS  for interview page
+# CSS INJECTION
 # ───────────────────────────────────────────
-
 def _inject_interview_css():
     st.markdown("""
 <style>
-/* ═══════════════════════
-   INTERVIEW LAYOUT
-═══════════════════════ */
-.iv-page-wrap {
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 0 0.5rem;
-}
-
-/* Question card */
-.iv-q-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 1.6rem 1.75rem;
-  margin: 1.25rem 0;
-  box-shadow: var(--shadow-card);
-}
-.iv-q-eyebrow {
-  font-family: 'DM Mono', monospace;
-  font-size: 0.65rem;
-  color: var(--text-mono);
-  text-transform: uppercase;
-  letter-spacing: 2px;
-  margin-bottom: 0.6rem;
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-}
-.iv-q-cat-badge {
-  background: var(--tag-bg);
-  border: 1px solid var(--tag-border);
-  border-radius: 4px;
-  padding: 1px 8px;
-  font-size: 0.6rem;
-  color: var(--tag-txt);
-  letter-spacing: 0.8px;
-}
-.iv-q-text {
-  font-family: 'Sora', sans-serif;
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: var(--text-h);
-  line-height: 1.55;
-  letter-spacing: -0.2px;
-}
-
-/* Progress bar */
-.iv-prog-wrap {
-  background: var(--border);
-  border-radius: 50px;
-  height: 5px;
-  margin: 0.6rem 0 0.3rem;
-  overflow: hidden;
-}
-.iv-prog-fill {
-  height: 100%;
-  border-radius: 50px;
-  background: linear-gradient(90deg, #059669, #34d399);
-  transition: width 0.4s ease;
-}
-
-                
-/* Mic button */
-.iv-mic-wrap {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 1.2rem 0 0.6rem;
-}
-
-/* Transcript card */
-.iv-transcript {
-  background: var(--bg-card-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px;
-  padding: 1rem 1.25rem;
-  font-family: 'Sora', sans-serif;
-  font-size: 0.88rem;
-  color: var(--text-body);
-  line-height: 1.65;
-  min-height: 60px;
-  margin-bottom: 0.75rem;
-}
-.iv-transcript-label {
-  font-family: 'DM Mono', monospace;
-  font-size: 0.62rem;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 1.5px;
-  margin-bottom: 0.4rem;
-}
-
-/* Score card (after eval) */
+.iv-page-wrap { max-width: 960px; margin: 0 auto; padding: 0 0.5rem; }
+.iv-q-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 1.6rem 1.75rem; margin: 1.25rem 0; box-shadow: var(--shadow-card); }
+.iv-q-eyebrow { font-family: 'DM Mono', monospace; font-size: 0.65rem; color: var(--text-mono); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0.6rem; display: flex; align-items: center; gap: 0.6rem; }
+.iv-q-cat-badge { background: var(--tag-bg); border: 1px solid var(--tag-border); border-radius: 4px; padding: 1px 8px; font-size: 0.6rem; color: var(--tag-txt); letter-spacing: 0.8px; }
+.iv-q-text { font-family: 'Sora', sans-serif; font-size: 1.1rem; font-weight: 600; color: var(--text-h); line-height: 1.55; letter-spacing: -0.2px; }
+.iv-prog-wrap { background: var(--border); border-radius: 50px; height: 5px; margin: 0.6rem 0 0.3rem; overflow: hidden; }
+.iv-prog-fill { height: 100%; border-radius: 50px; background: linear-gradient(90deg, #059669, #34d399); transition: width 0.4s ease; }
+.iv-mic-wrap { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 1.2rem 0 0.6rem; }
+.iv-transcript { background: var(--bg-card-2); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 1rem 1.25rem; font-family: 'Sora', sans-serif; font-size: 0.88rem; color: var(--text-body); line-height: 1.65; min-height: 60px; margin-bottom: 0.75rem; }
+.iv-transcript-label { font-family: 'DM Mono', monospace; font-size: 0.62rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 0.4rem; }
 .iv-score-pass { border-left: 3px solid #059669 !important; }
 .iv-score-fail { border-left: 3px solid #dc2626 !important; }
-.iv-score-card {
-  background: var(--bg-card-2);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 0.85rem 1.1rem;
-  display: flex;
-  align-items: flex-start;
-  gap: 1rem;
-  margin-bottom: 0.75rem;
-}
-.iv-score-num {
-  font-family: 'Sora', sans-serif;
-  font-size: 1.6rem;
-  font-weight: 800;
-  color: var(--accent);
-  line-height: 1;
-  white-space: nowrap;
-}
-.iv-score-label {
-  font-family: 'DM Mono', monospace;
-  font-size: 0.62rem;
-  color: var(--text-muted);
-  letter-spacing: 0.5px;
-}
-.iv-score-feedback {
-  font-family: 'Sora', sans-serif;
-  font-size: 0.8rem;
-  color: var(--text-body);
-  line-height: 1.55;
-  font-style: italic;
-}
-
-/* Nav dots */
-.iv-dots {
-  display: flex;
-  justify-content: center;
-  gap: 6px;
-  margin-top: 0.75rem;
-}
-
-/* Final hero */
-.iv-final-hero {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 2.5rem 2rem;
-  text-align: center;
-  margin-bottom: 1.5rem;
-  box-shadow: var(--shadow-card);
-}
-.iv-final-score {
-  font-family: 'Sora', sans-serif;
-  font-size: 4rem;
-  font-weight: 800;
-  letter-spacing: -3px;
-  line-height: 1;
-  margin: 0.6rem 0 0.2rem;
-}
-.iv-final-label {
-  font-family: 'DM Mono', monospace;
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 2px;
-  margin-bottom: 0.75rem;
-}
-.iv-verdict-pass {
-  background: rgba(5,150,105,0.10);
-  border: 1px solid rgba(5,150,105,0.30);
-  color: #059669;
-  border-radius: 50px;
-  padding: 4px 18px;
-  font-family: 'DM Mono', monospace;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-}
-.iv-verdict-fail {
-  background: rgba(239,68,68,0.08);
-  border: 1px solid rgba(239,68,68,0.25);
-  color: #dc2626;
-  border-radius: 50px;
-  padding: 4px 18px;
-  font-family: 'DM Mono', monospace;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-}
-
-/* Emotion summary card */
-.iv-emotion-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 1.4rem 1.5rem;
-  box-shadow: var(--shadow-card);
-  margin-bottom: 1rem;
-}
-.iv-emotion-title {
-  font-family: 'DM Mono', monospace;
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 2px;
-  color: var(--text-muted);
-  margin-bottom: 1rem;
-}
-.iv-emotion-bar-wrap {
-  background: var(--border);
-  border-radius: 50px;
-  height: 8px;
-  overflow: hidden;
-  margin: 4px 0 10px;
-}
-.iv-bar-conf { background: linear-gradient(90deg, #059669, #34d399); height: 100%; border-radius: 50px; }
-.iv-bar-anx  { background: linear-gradient(90deg, #ef4444, #f87171); height: 100%; border-radius: 50px; }
-.iv-bar-comp { background: linear-gradient(90deg, #3b82f6, #60a5fa); height: 100%; border-radius: 50px; }
+.iv-score-card { background: var(--bg-card-2); border: 1px solid var(--border); border-radius: 12px; padding: 0.85rem 1.1rem; display: flex; align-items: flex-start; gap: 1rem; margin-bottom: 0.75rem; }
+.iv-score-num { font-family: 'Sora', sans-serif; font-size: 1.6rem; font-weight: 800; color: var(--accent); line-height: 1; white-space: nowrap; }
+.iv-score-label { font-family: 'DM Mono', monospace; font-size: 0.62rem; color: var(--text-muted); letter-spacing: 0.5px; }
+.iv-score-feedback { font-family: 'Sora', sans-serif; font-size: 0.8rem; color: var(--text-body); line-height: 1.55; font-style: italic; }
+.iv-dots { display: flex; justify-content: center; gap: 6px; margin-top: 0.75rem; }
+.iv-final-hero { background: var(--bg-card); border: 1px solid var(--border); border-radius: 20px; padding: 2.5rem 2rem; text-align: center; margin-bottom: 1.5rem; box-shadow: var(--shadow-card); }
+.iv-final-score { font-family: 'Sora', sans-serif; font-size: 4rem; font-weight: 800; letter-spacing: -3px; line-height: 1; margin: 0.6rem 0 0.2rem; }
+.iv-final-label { font-family: 'DM Mono', monospace; font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 0.75rem; }
+.iv-verdict-pass { background: rgba(5,150,105,0.10); border: 1px solid rgba(5,150,105,0.30); color: #059669; border-radius: 50px; padding: 4px 18px; font-family: 'DM Mono', monospace; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.5px; }
+.iv-verdict-fail { background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25); color: #dc2626; border-radius: 50px; padding: 4px 18px; font-family: 'DM Mono', monospace; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.5px; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ───────────────────────────────────────────
-# BRIEFING SCREEN  (camera permission gate lives here)
+# BRIEFING SCREEN
 # ───────────────────────────────────────────
-
 def _render_briefing(job_ctx: dict, profile: dict, webrtc_ctx):
     job_title = job_ctx.get("job_title", "Interview")
     company   = job_ctx.get("company_name", "")
@@ -560,7 +285,7 @@ def _render_briefing(job_ctx: dict, profile: dict, webrtc_ctx):
     tips = [
         ("🎙️", "Speak clearly", "Press the mic button, answer, then press stop. Speak at a natural pace."),
         ("📷", "Camera on", "Allow camera access below. Sit in a well-lit area facing the camera."),
-        ("⏭️", "Take your time", "There is no time limit per question. Move on when you are ready."),
+        ("🚨", "Do NOT switch tabs", "Fullscreen is forced. Exiting fullscreen or switching tabs terminates the interview."),
     ]
     for col, (icon, title, desc) in zip([c1, c2, c3], tips):
         with col:
@@ -573,8 +298,6 @@ def _render_briefing(job_ctx: dict, profile: dict, webrtc_ctx):
             """, unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
-
-    # ── Camera permission gate ──
     st.markdown('<div class="section-heading">📷 Camera Check</div>', unsafe_allow_html=True)
     st.caption("Click **START** below and allow camera access when your browser asks.")
 
@@ -585,23 +308,15 @@ def _render_briefing(job_ctx: dict, profile: dict, webrtc_ctx):
     elif webrtc_ctx is not None:
         st.warning("⏳ Waiting for camera permission. Click **START** on the widget above.")
     else:
-        st.error("⚠️ Camera component unavailable. Check the setup notes below.")
+        st.error("⚠️ Camera component unavailable.")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
     bc1, bc2, bc3 = st.columns([1, 1.5, 1])
     with bc2:
-        if st.button(
-            "🚀  Begin Interview",
-            use_container_width=True,
-            key="iv2_begin_btn",
-            disabled=not cam_ready,
-        ):
-            # Clear any leftover data from a previous attempt
+        if st.button("🚀  Begin Interview", use_container_width=True, key="iv2_begin_btn", disabled=not cam_ready):
             if webrtc_ctx and webrtc_ctx.video_processor:
                 webrtc_ctx.video_processor.reset()
-
-            # --- MODERN ANIMATED SPINNER ---
             with st.status("🤖 Generating role-specific questions...", expanded=True) as status:
                 questions = _generate_questions(profile, job_ctx)
                 status.update(label="✅ Questions ready!", state="complete", expanded=False)
@@ -614,20 +329,79 @@ def _render_briefing(job_ctx: dict, profile: dict, webrtc_ctx):
             _set("phase", "question")
             st.rerun()
 
-        if not cam_ready:
-            st.caption("Camera permission is required before the interview can start.")
-
 
 # ───────────────────────────────────────────
-# QUESTION SCREEN
-# (camera widget is already rendered above this, by render_interview_page)
+# QUESTION SCREEN (WITH ANTI-CHEAT TRACKING)
 # ───────────────────────────────────────────
-
 def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
-    """
-    Renders the question card and recording controls. 
-    Camera is already rendered in the parent column, so we just use the webrtc_ctx.
-    """
+    
+    # Init violations counter
+    if "iv2_violations" not in st.session_state:
+        st.session_state.iv2_violations = 0
+    
+    # ── ANTI-CHEATING: Javascript UI Injection ──
+    components.html(
+        """
+        <script>
+        // Force fullscreen
+        if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen().catch(err => {
+                console.log("Fullscreen blocked by browser until user interaction.");
+            });
+        }
+        
+        // Track Visibility Change
+        document.addEventListener("visibilitychange", function() {
+            if (document.hidden) {
+                // If user switches tabs, overlay a giant warning forcing them to click
+                const warningDiv = document.createElement("div");
+                warningDiv.id = "cheat-overlay";
+                warningDiv.style = "position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(220, 38, 38, 0.95);z-index:999999;display:flex;flex-direction:column;align-items:center;justify-content:center;color:white;font-family:sans-serif;";
+                warningDiv.innerHTML = `
+                    <h1 style="font-size:3rem;margin-bottom:20px;">🚨 VIOLATION DETECTED</h1>
+                    <p style="font-size:1.5rem;margin-bottom:30px;">You switched tabs or exited the interview window.</p>
+                    <p style="font-size:1.2rem;">Please click the red button below to acknowledge and return to your interview. Repeated violations will terminate the session.</p>
+                `;
+                document.body.appendChild(warningDiv);
+                
+                // Programmatically click the hidden Streamlit button to register violation in Python
+                const btns = window.parent.document.querySelectorAll('button');
+                btns.forEach(btn => {
+                    if(btn.innerText.includes('REGISTER_VIOLATION_HIDDEN_BTN')) {
+                        btn.click();
+                    }
+                });
+            } else {
+                // Remove overlay when they return
+                const overlay = document.getElementById("cheat-overlay");
+                if (overlay) overlay.remove();
+            }
+        });
+        </script>
+        """,
+        height=0
+    )
+    
+    # Hidden button for JS to trigger state change
+    if st.button("REGISTER_VIOLATION_HIDDEN_BTN", key="hidden_violation_trigger"):
+        st.session_state.iv2_violations += 1
+        st.rerun()
+
+    # Apply CSS to hide the button so candidates don't see it
+    st.markdown("""<style>button:contains('REGISTER_VIOLATION_HIDDEN_BTN') { display: none !important; }</style>""", unsafe_allow_html=True)
+
+    # Check violations limits
+    violations = st.session_state.iv2_violations
+    if violations == 1:
+        st.error("⚠️ **WARNING:** You switched tabs or exited fullscreen! Do this again and your interview will be terminated.")
+    elif violations >= 2:
+        st.error("🚨 **INTERVIEW TERMINATED:** Multiple rule violations detected (Tab Switching). Generating report...")
+        st.session_state.terminated_due_to_cheating = True
+        _set("phase", "evaluating")
+        time.sleep(2.5)
+        st.rerun()
+        return
+
     questions = _ss("questions", [])
     current   = _ss("current_q", 0)
     total     = len(questions)
@@ -642,24 +416,10 @@ def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
     q_obj     = questions[current]
     q_text    = q_obj.get("question",  "—")
     category  = q_obj.get("category",  "General")
-    keywords  = q_obj.get("expected_keywords", [])
 
-    # ── Camera off notice (non-blocking) ──
-    # The camera widget renders in an iframe, so its own STOP button can't be
-    # hidden/disabled from here. Instead we detect if it's not currently
-    # playing (stopped by the candidate, OR disconnected on its own due to a
-    # network hiccup / laptop sleep) and just show a heads-up — the question,
-    # mic recorder, and Skip/Submit/Next controls below stay fully usable so
-    # the candidate isn't blocked mid-interview just because the camera dropped.
     if not _camera_ready(webrtc_ctx):
-        st.warning(
-            "📷 **Camera is off.** Emotion tracking is paused, but you can keep "
-            "answering — click **START** on the camera widget above to resume "
-            "tracking. (This can happen if you clicked stop, or if the connection "
-            "dropped due to network/laptop sleep.)"
-        )
+        st.warning("📷 **Camera is off.** Please ensure your camera is running for emotion tracking.")
 
-    # ── Header ──
     st.markdown(f"""
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
       <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--text-muted);
@@ -668,13 +428,9 @@ def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
     </div>
     """, unsafe_allow_html=True)
 
-    # Progress bar
     pct = int((current / total) * 100)
-    st.markdown(f"""
-    <div class="iv-prog-wrap"><div class="iv-prog-fill" style="width:{pct}%;"></div></div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div class="iv-prog-wrap"><div class="iv-prog-fill" style="width:{pct}%;"></div></div>""", unsafe_allow_html=True)
 
-    # ── QUESTION CARD ──
     st.markdown(f"""
     <div class="iv-q-card">
       <div class="iv-q-eyebrow">// question {current + 1} <span class="iv-q-cat-badge">{category.upper()}</span></div>
@@ -682,12 +438,10 @@ def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Transcript / Score display ──
     prev_answer = _ss("answers", {}).get(current, "")
     if prev_answer:
         st.markdown(f'<div class="iv-transcript-label">// your recorded answer</div><div class="iv-transcript">{prev_answer}</div>', unsafe_allow_html=True)
 
-    # ── Recording Controls (native browser mic recorder — separate from camera feed) ──
     audio_value = st.audio_input("🎙️ Record your answer", key=f"iv2_audio_{current}")
 
     if audio_value is not None:
@@ -703,7 +457,6 @@ def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
     elif not prev_answer:
         st.caption("// click the microphone above, speak your answer, then click it again to stop")
 
-    # ── Navigation ──
     nav1, _, nav2 = st.columns([1, 2, 1])
     with nav1:
         if st.button("⏭ Skip", use_container_width=True, key=f"iv2_skip_{current}"):
@@ -721,30 +474,21 @@ def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
                 if webrtc_ctx and webrtc_ctx.video_processor: _set("emotion_tl", webrtc_ctx.video_processor.get_timeline())
                 _set("phase", "evaluating"); st.rerun()
 
-    # ── Progress dots ──
     answers = _ss("answers", {})
     scores  = _ss("scores",  {})
     dots_html = ""
     for i in range(total):
         has_answer = bool(answers.get(i, "").strip())
         has_score  = i in scores
-        if i == current:
-            col = "var(--accent)"
-        elif has_score:
-            col = "#10b981" if scores[i].get("correct") else "#ef4444"
-        elif has_answer:
-            col = "#d97706"
-        else:
-            col = "var(--border)"
-        dots_html += (
-            f'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;'
-            f'background:{col};margin:0 3px;cursor:default;" title="Q{i+1}"></span>'
-        )
+        if i == current: col = "var(--accent)"
+        elif has_score:  col = "#10b981" if scores[i].get("correct") else "#ef4444"
+        elif has_answer: col = "#d97706"
+        else:            col = "var(--border)"
+        dots_html += f'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:{col};margin:0 3px;cursor:default;" title="Q{i+1}"></span>'
 
     st.markdown(
         f'<div class="iv-dots">{dots_html}</div>'
-        f'<div style="text-align:center;font-family:\'DM Mono\',monospace;font-size:0.6rem;'
-        f'color:var(--text-muted);margin-top:0.4rem;letter-spacing:0.5px;">'
+        f'<div style="text-align:center;font-family:\'DM Mono\',monospace;font-size:0.6rem;color:var(--text-muted);margin-top:0.4rem;letter-spacing:0.5px;">'
         f'🟢 scored &nbsp; 🔴 needs work &nbsp; 🟡 recorded &nbsp; ⚪ pending</div>',
         unsafe_allow_html=True
     )
@@ -753,7 +497,6 @@ def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
 # ───────────────────────────────────────────
 # EVALUATING SCREEN
 # ───────────────────────────────────────────
-
 def _render_evaluating(job_ctx: dict, profile: dict):
     st.markdown("""
     <div class="page-hero">
@@ -769,11 +512,20 @@ def _render_evaluating(job_ctx: dict, profile: dict):
     job_title = job_ctx.get("job_title",    "")
     company   = job_ctx.get("company_name", "")
 
-    # --- MODERN ANIMATED SPINNER (Replaces old st.progress loop) ---
     with st.status("📊 Finalizing Interview Results...", expanded=True) as status:
-        if not scores and questions:
-            status.update(label=f"🤖 Scoring all {len(questions)} answers (1 request)...", state="running")
+        # Check if user was terminated early due to cheating
+        is_terminated = st.session_state.get("terminated_due_to_cheating", False)
+        
+        if not scores and questions and not is_terminated:
+            status.update(label=f"🤖 Scoring all {len(questions)} answers...", state="running")
             scores = evaluate_interview_batch(questions, answers, job_title, company)
+            _set("scores", scores)
+        elif is_terminated:
+            # Score 0 for all skipped questions if terminated
+            status.update(label="🚨 Interview terminated. Filling remaining scores with 0...", state="running")
+            for i in range(len(questions)):
+                if i not in scores:
+                    scores[i] = {"score": 0, "correct": False, "feedback": "Terminated due to rule violation."}
             _set("scores", scores)
 
         status.update(label="📊 Building emotion analysis...", state="running")
@@ -791,7 +543,6 @@ def _render_evaluating(job_ctx: dict, profile: dict):
 # ───────────────────────────────────────────
 # DONE / RESULTS SCREEN
 # ───────────────────────────────────────────
-
 def _render_done(job_ctx: dict, profile: dict):
     from reports.pdf_generator import generate_interview_report_pdf
     from reports.firebase_saver import save_interview_report
@@ -812,20 +563,25 @@ def _render_done(job_ctx: dict, profile: dict):
     correct_c  = sum(1 for i in range(total_q) if scores.get(i, {}).get("correct", False))
     incorrect_c= total_q - correct_c
 
-    # ── Combined overall score: answer correctness (70%) + emotion/behavioral score (30%) ──
-    # If no emotion data was captured at all (e.g. camera failed), fall back to
-    # the pure answer score so a missing camera doesn't unfairly tank the result.
     behavioral_score = emotion_summary.get("overall_score", 50)
     has_emotion_data = emotion_summary.get("total_samples", 0) > 0
     avg_score = round(0.7 * answer_score + 0.3 * behavioral_score) if has_emotion_data else answer_score
 
-    passed     = avg_score >= min_score
+    # Force fail if terminated
+    is_terminated = st.session_state.get("terminated_due_to_cheating", False)
+    if is_terminated:
+        avg_score = 0
+        passed = False
+    else:
+        passed = avg_score >= min_score
 
     score_color  = "#059669" if passed else "#dc2626"
     verdict_cls  = "iv-verdict-pass" if passed else "iv-verdict-fail"
     verdict_txt  = f"PASS — meets {min_score}% threshold" if passed else f"FAIL — below {min_score}% threshold"
+    
+    if is_terminated:
+        verdict_txt = "FAIL — TERMINATED FOR VIOLATIONS"
 
-    # ── Final hero ──
     st.markdown(f"""
     <div class="iv-final-hero">
       <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--text-muted);
@@ -840,29 +596,15 @@ def _render_done(job_ctx: dict, profile: dict):
     </div>
     """, unsafe_allow_html=True)
 
-    if has_emotion_data:
-        st.caption(f"// {answer_score}/100 answer accuracy (70%) + {behavioral_score}/100 behavioral/emotion score (30%)")
-    else:
-        st.caption("// based on answer accuracy only — no camera/emotion data was captured for this interview")
+    if has_emotion_data: st.caption(f"// {answer_score}/100 answer accuracy (70%) + {behavioral_score}/100 behavioral/emotion score (30%)")
+    else: st.caption("// based on answer accuracy only — no camera/emotion data was captured for this interview")
 
-    # ── Stats row ──
     s1, s2, s3, s4 = st.columns(4, gap="small")
-    for col, (n, lbl) in zip([s1, s2, s3, s4], [
-        (total_q,       "questions"),
-        (correct_c,     "correct"),
-        (incorrect_c,   "needs work"),
-        (f"{avg_score}%","avg score"),
-    ]):
-        with col:
-            st.markdown(
-                f'<div class="stat-card"><div class="stat-num" style="font-size:1.5rem;">{n}</div>'
-                f'<div class="stat-label">{lbl}</div></div>',
-                unsafe_allow_html=True
-            )
+    for col, (n, lbl) in zip([s1, s2, s3, s4], [(total_q, "questions"), (correct_c, "correct"), (incorrect_c, "needs work"), (f"{avg_score}%","avg score")]):
+        with col: st.markdown(f'<div class="stat-card"><div class="stat-num" style="font-size:1.5rem;">{n}</div><div class="stat-label">{lbl}</div></div>', unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Emotion summary ──
     if emotion_summary and emotion_summary.get("total_samples", 0) > 0:
         st.markdown('<div class="section-heading">📊 Emotion Analysis</div>', unsafe_allow_html=True)
         avg_conf = emotion_summary.get("avg_confidence", 0)
@@ -872,30 +614,11 @@ def _render_done(job_ctx: dict, profile: dict):
         assess   = emotion_summary.get("assessment",      "")
 
         e1, e2, e3, e4 = st.columns(4, gap="small")
-        for col, (n, lbl, bar_cls) in zip([e1, e2, e3, e4], [
-            (f"{avg_conf}%", "confidence",      "iv-bar-conf"),
-            (f"{avg_anx}%",  "anxiety",         "iv-bar-anx"),
-            (f"{avg_comp}%", "composure",       "iv-bar-comp"),
-            (dom_em,         "dominant emotion",""),
-        ]):
-            with col:
-                st.markdown(
-                    f'<div class="stat-card"><div class="stat-num" style="font-size:1.2rem;">{n}</div>'
-                    f'<div class="stat-label">{lbl}</div></div>',
-                    unsafe_allow_html=True
-                )
+        for col, (n, lbl, bar_cls) in zip([e1, e2, e3, e4], [(f"{avg_conf}%", "confidence", "iv-bar-conf"), (f"{avg_anx}%", "anxiety", "iv-bar-anx"), (f"{avg_comp}%", "composure", "iv-bar-comp"), (dom_em, "dominant emotion","")]):
+            with col: st.markdown(f'<div class="stat-card"><div class="stat-num" style="font-size:1.2rem;">{n}</div><div class="stat-label">{lbl}</div></div>', unsafe_allow_html=True)
 
-        if assess:
-            st.markdown(
-                f'<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;'
-                f'padding:0.9rem 1.2rem;margin:0.75rem 0;font-family:\'Sora\',sans-serif;'
-                f'font-size:0.85rem;color:var(--text-body);line-height:1.6;">'
-                f'<span style="font-family:\'DM Mono\',monospace;font-size:0.6rem;color:var(--text-muted);">'
-                f'// assessment</span><br>{assess}</div>',
-                unsafe_allow_html=True
-            )
+        if assess: st.markdown(f'<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:0.9rem 1.2rem;margin:0.75rem 0;font-family:\'Sora\',sans-serif;font-size:0.85rem;color:var(--text-body);line-height:1.6;"><span style="font-family:\'DM Mono\',monospace;font-size:0.6rem;color:var(--text-muted);">// assessment</span><br>{assess}</div>', unsafe_allow_html=True)
 
-    # ── Score breakdown ──
     st.markdown('<div class="section-heading">Score breakdown</div>', unsafe_allow_html=True)
     for i, q_obj in enumerate(questions):
         sc      = scores.get(i, {})
@@ -905,20 +628,14 @@ def _render_done(job_ctx: dict, profile: dict):
         bar_col = "#059669" if correct else "#dc2626"
         st.markdown(f"""
         <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">
-          <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--text-muted);
-                       min-width:28px;">Q{i+1}</span>
+          <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--text-muted);min-width:28px;">Q{i+1}</span>
           <span style="min-width:18px;font-weight:700;color:{bar_col};">{result}</span>
-          <div style="flex:1;background:var(--border);border-radius:50px;height:7px;overflow:hidden;">
-            <div style="width:{score}%;height:100%;background:{bar_col};border-radius:50px;"></div>
-          </div>
-          <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--text-muted);
-                       min-width:48px;text-align:right;">{score}/100</span>
-          <span style="font-family:'DM Mono',monospace;font-size:0.6rem;color:var(--text-muted);
-                       min-width:70px;">{q_obj.get('category','')}</span>
+          <div style="flex:1;background:var(--border);border-radius:50px;height:7px;overflow:hidden;"><div style="width:{score}%;height:100%;background:{bar_col};border-radius:50px;"></div></div>
+          <span style="font-family:'DM Mono',monospace;font-size:0.65rem;color:var(--text-muted);min-width:48px;text-align:right;">{score}/100</span>
+          <span style="font-family:'DM Mono',monospace;font-size:0.6rem;color:var(--text-muted);min-width:70px;">{q_obj.get('category','')}</span>
         </div>
         """, unsafe_allow_html=True)
 
-    # ── Full answer review ──
     with st.expander("📋 Full answer review", expanded=False):
         for i, q_obj in enumerate(questions):
             sc       = scores.get(i, {})
@@ -929,36 +646,25 @@ def _render_done(job_ctx: dict, profile: dict):
             rc       = "#059669" if correct else "#dc2626"
             rl       = "✓ Correct" if correct else "✗ Needs Work"
             st.markdown(f"""
-            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;
-                        padding:1rem 1.25rem;margin-bottom:0.9rem;">
-              <div style="font-family:'DM Mono',monospace;font-size:0.62rem;color:var(--text-muted);
-                          margin-bottom:0.4rem;">
-                // Q{i+1} · {q_obj.get('category','')} ·
-                <span style="color:{rc};font-weight:700;">{rl} · {score}/100</span>
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:1rem 1.25rem;margin-bottom:0.9rem;">
+              <div style="font-family:'DM Mono',monospace;font-size:0.62rem;color:var(--text-muted);margin-bottom:0.4rem;">
+                // Q{i+1} · {q_obj.get('category','')} · <span style="color:{rc};font-weight:700;">{rl} · {score}/100</span>
               </div>
-              <div style="font-family:'Sora',sans-serif;font-size:0.92rem;font-weight:600;
-                          color:var(--text-h);margin-bottom:0.6rem;line-height:1.5;">
-                {q_obj.get('question','')}
-              </div>
-              <div style="font-family:'Sora',sans-serif;font-size:0.83rem;color:var(--text-body);
-                          background:var(--bg-card-2);border-radius:8px;padding:0.65rem 0.9rem;
-                          margin-bottom:0.5rem;line-height:1.6;">{answer}</div>
-              <div style="font-family:'DM Mono',monospace;font-size:0.68rem;color:var(--text-muted);
-                          font-style:italic;">💬 {feedback}</div>
+              <div style="font-family:'Sora',sans-serif;font-size:0.92rem;font-weight:600;color:var(--text-h);margin-bottom:0.6rem;line-height:1.5;">{q_obj.get('question','')}</div>
+              <div style="font-family:'Sora',sans-serif;font-size:0.83rem;color:var(--text-body);background:var(--bg-card-2);border-radius:8px;padding:0.65rem 0.9rem;margin-bottom:0.5rem;line-height:1.6;">{answer}</div>
+              <div style="font-family:'DM Mono',monospace;font-size:0.68rem;color:var(--text-muted);font-style:italic;">💬 {feedback}</div>
             </div>
             """, unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
-
-    # ── Generate + save PDF ──
     st.markdown('<div class="section-heading">📄 Your Report</div>', unsafe_allow_html=True)
 
     report_b64 = _ss("report_b64", "")
 
     if not report_b64:
-        # ---ANIMATED SPINNER ---
         with st.status("📄 Compiling your final report...", expanded=True) as status:
             try:
+                violations_count = st.session_state.get("iv2_violations", 0)
                 pdf_bytes = generate_interview_report_pdf(
                     candidate_name=profile.get("full_name", st.session_state.get("user_name", "Candidate")),
                     job_title=job_title,
@@ -969,9 +675,10 @@ def _render_done(job_ctx: dict, profile: dict):
                     completed_at=completed_at,
                     emotion_summary=emotion_summary,
                     overall_score=avg_score,
+                    terminated_due_to_cheating=is_terminated,
+                    violations_count=violations_count
                 )
 
-                # Save to Firebase
                 uid = st.session_state.get("user_uid", "")
                 if uid and app_key:
                     status.update(label="💾 Saving report to database...", state="running")
@@ -990,6 +697,8 @@ def _render_done(job_ctx: dict, profile: dict):
                         "dominant_emotion": emotion_summary.get("dominant_emotion","Neutral"),
                         "emotion_assessment": emotion_summary.get("assessment",   ""),
                         "completed_at":     completed_at,
+                        "terminated_due_to_cheating": is_terminated,
+                        "violations_count": violations_count,
                         "questions_data": [
                             {
                                 "question": questions[i].get("question",  ""),
@@ -1040,21 +749,10 @@ def _render_done(job_ctx: dict, profile: dict):
         st.session_state.current_page = "dashboard"
         st.rerun()
 
-
-# ───────────────────────────────────────────
-# MAIN ENTRY POINT  (called from app.py)
-# ───────────────────────────────────────────
-
 def render_interview_page():
-    """
-    Main interview page renderer.
-    Camera is initialized once at the top to avoid duplicate key errors.
-    Layout splits into columns during the 'question' phase.
-    """
     _inject_interview_css()
 
     from utils.firebase_helpers import load_candidate_profile
-
     uid     = st.session_state.get("user_uid", "")
     profile = load_candidate_profile(uid) if uid else {}
     job_ctx = st.session_state.get("job_interview_context")
@@ -1072,36 +770,24 @@ def render_interview_page():
             "min_speech_clarity": 60,
         }
 
-    # Initialize phase
-    if _ss("phase") is None:
-        _set("phase", "briefing")
+    if _ss("phase") is None: _set("phase", "briefing")
     phase = _ss("phase")
 
-    # Layout structure
     if phase == "briefing":
-        # Full width for briefing
         webrtc_ctx = _get_webrtc_ctx()
         _render_briefing(job_ctx, profile, webrtc_ctx)
-
     elif phase == "question":
-        # Split layout for questions: Question (2/3) + Camera (1/3)
         col_left, col_right = st.columns([2, 1])
-        
-        # Camera is rendered inside the right column
         with col_right:
             st.markdown("### 📷 Live Camera")
             webrtc_ctx = _get_webrtc_ctx()
             _render_object_alert_fragment(webrtc_ctx)
-            
         with col_left:
             _render_question_screen(job_ctx, profile, webrtc_ctx)
-
     elif phase == "evaluating":
         _render_evaluating(job_ctx, profile)
-
     elif phase == "done":
         _render_done(job_ctx, profile)
-
     else:
         _set("phase", "briefing")
         st.rerun()

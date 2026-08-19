@@ -25,6 +25,66 @@ def manual_reject_message(job_title: str) -> str:
     )
 
 
+def _send_auto_reject_email(candidate_uid, cand_app, report_payload, overall_score, min_score):
+    """
+    Fires automatically the moment an interview is auto-rejected (score below
+    threshold) — no recruiter involved, so this uses the fixed template and
+    attaches the freshly generated PDF report.
+    Any failure here is swallowed so it never blocks status resolution.
+    """
+    try:
+        from utils.email_sender import send_email, get_candidate_email
+        from utils.email_templates import auto_rejected_email
+        from reports.pdf_generator import generate_interview_report_pdf
+
+        candidate_email = get_candidate_email(candidate_uid)
+        if not candidate_email:
+            return
+
+        candidate_name = report_payload.get("candidate_name", "Candidate")
+        job_title = cand_app.get("job_title", report_payload.get("job_title", ""))
+        company = cand_app.get("company_name", report_payload.get("company_name", ""))
+
+        questions_data = report_payload.get("questions_data", [])
+        questions = [{"question": r.get("question", ""), "category": r.get("category", ""), "expected_keywords": []} for r in questions_data]
+        answers   = {i: r.get("answer", "") for i, r in enumerate(questions_data)}
+        scores    = {i: {"score": r.get("score", 0), "correct": r.get("correct", False), "feedback": r.get("feedback", "")} for i, r in enumerate(questions_data)}
+
+        emotion_summary = {
+            "total_samples":    1,
+            "avg_confidence":   report_payload.get("avg_confidence", 0),
+            "avg_anxiety":      report_payload.get("avg_anxiety", 0),
+            "avg_composed":     report_payload.get("avg_composed", 0),
+            "dominant_emotion": report_payload.get("dominant_emotion", "Neutral"),
+            "overall_score":    report_payload.get("emotion_behavioral_score", 50),
+            "assessment":       report_payload.get("emotion_assessment", ""),
+        }
+
+        pdf_bytes = generate_interview_report_pdf(
+            candidate_name=candidate_name,
+            job_title=job_title,
+            company=company,
+            questions=questions,
+            answers=answers,
+            scores=scores,
+            completed_at=report_payload.get("completed_at", ""),
+            emotion_summary=emotion_summary,
+            overall_score=overall_score,
+        )
+
+        subject, body = auto_rejected_email(candidate_name, job_title, company, overall_score, min_score)
+        send_email(
+            to_email=candidate_email,
+            subject=subject,
+            body=body,
+            pdf_bytes=pdf_bytes,
+            pdf_filename=f"InterviewAI_{candidate_name.replace(' ', '_')}_Report.pdf",
+        )
+    except Exception:
+        # Never let email failure break the interview status flow
+        pass
+
+
 def resolve_status_after_report(
     realtime_db,
     candidate_uid: str,
@@ -34,7 +94,7 @@ def resolve_status_after_report(
 ) -> str:
     """
     After a report is saved:
-    - score < min_score  → auto-reject with default message
+    - score < min_score  → auto-reject with default message + auto-send rejection email w/ PDF
     - score >= min_score → stay at Report Generated (recruiter decides manually)
 
     Returns the final application status.
@@ -103,5 +163,8 @@ def resolve_status_after_report(
         realtime_db.reference(
             f"recruiters/{recruiter_uid}/applications/{recruiter_app_key}"
         ).update(rec_update)
+
+    if overall_score < min_score:
+        _send_auto_reject_email(candidate_uid, cand_app, report_payload, overall_score, min_score)
 
     return status
