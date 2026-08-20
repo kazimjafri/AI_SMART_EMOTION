@@ -1,14 +1,12 @@
 # reports/post_interview.py — status resolution after interview report is saved
 from datetime import datetime
 
-
 def auto_reject_message(overall_score: int, min_score: int) -> str:
     return (
         f"Your overall AI interview score ({overall_score}%) did not meet the minimum "
         f"requirement ({min_score}%) for this role. Thank you for your interest — "
         f"we encourage you to explore other opportunities."
     )
-
 
 def hire_message(job_title: str, company: str) -> str:
     company_part = f" at {company}" if company else ""
@@ -17,28 +15,39 @@ def hire_message(job_title: str, company: str) -> str:
         f"The recruiter will be in touch with next steps."
     )
 
-
 def manual_reject_message(job_title: str) -> str:
     return (
         f"Thank you for completing the interview for {job_title}. After careful review, "
         f"the recruiter has decided not to move forward with your application at this time."
     )
 
-
 def _send_auto_reject_email(candidate_uid, cand_app, report_payload, overall_score, min_score):
     """
     Fires automatically the moment an interview is auto-rejected (score below
     threshold) — no recruiter involved, so this uses the fixed template and
     attaches the freshly generated PDF report.
-    Any failure here is swallowed so it never blocks status resolution.
     """
     try:
         from utils.email_sender import send_email, get_candidate_email
         from utils.email_templates import auto_rejected_email
         from reports.pdf_generator import generate_interview_report_pdf
+        from firebase_admin import db as realtime_db
 
-        candidate_email = get_candidate_email(candidate_uid)
+        # 1. Fetch updated contact email from profile
+        candidate_email = None
+        try:
+            profile = realtime_db.reference(f"users/{candidate_uid}/candidate_profile").get()
+            if profile and profile.get("email"):
+                candidate_email = profile.get("email")
+        except Exception:
+            pass
+        
+        # Fallback to Auth email if profile email is missing
         if not candidate_email:
+            candidate_email = get_candidate_email(candidate_uid)
+            
+        if not candidate_email:
+            print("⚠️ Auto-reject email failed: No candidate email found.")
             return
 
         candidate_name = report_payload.get("candidate_name", "Candidate")
@@ -50,8 +59,12 @@ def _send_auto_reject_email(candidate_uid, cand_app, report_payload, overall_sco
         answers   = {i: r.get("answer", "") for i, r in enumerate(questions_data)}
         scores    = {i: {"score": r.get("score", 0), "correct": r.get("correct", False), "feedback": r.get("feedback", "")} for i, r in enumerate(questions_data)}
 
+        # 2. Fix the total_samples bug here as well
+        timeline = report_payload.get("emotion_timeline", [])
+        total_frames = len(timeline) if timeline else 1
+
         emotion_summary = {
-            "total_samples":    1,
+            "total_samples":    total_frames,
             "avg_confidence":   report_payload.get("avg_confidence", 0),
             "avg_anxiety":      report_payload.get("avg_anxiety", 0),
             "avg_composed":     report_payload.get("avg_composed", 0),
@@ -60,6 +73,7 @@ def _send_auto_reject_email(candidate_uid, cand_app, report_payload, overall_sco
             "assessment":       report_payload.get("emotion_assessment", ""),
         }
 
+        # 3. Pass anti-cheat flags to avoid PDF generation errors
         pdf_bytes = generate_interview_report_pdf(
             candidate_name=candidate_name,
             job_title=job_title,
@@ -70,9 +84,12 @@ def _send_auto_reject_email(candidate_uid, cand_app, report_payload, overall_sco
             completed_at=report_payload.get("completed_at", ""),
             emotion_summary=emotion_summary,
             overall_score=overall_score,
+            terminated_due_to_cheating=report_payload.get("terminated_due_to_cheating", False),
+            violations_count=report_payload.get("violations_count", 0)
         )
 
         subject, body = auto_rejected_email(candidate_name, job_title, company, overall_score, min_score)
+        
         send_email(
             to_email=candidate_email,
             subject=subject,
@@ -80,9 +97,11 @@ def _send_auto_reject_email(candidate_uid, cand_app, report_payload, overall_sco
             pdf_bytes=pdf_bytes,
             pdf_filename=f"InterviewAI_{candidate_name.replace(' ', '_')}_Report.pdf",
         )
-    except Exception:
-        # Never let email failure break the interview status flow
-        pass
+        print(f"✅ Auto-reject email successfully sent to {candidate_email}")
+        
+    except Exception as e:
+        # Instead of 'pass', print the error so we can debug if it fails again
+        print(f"⚠️ Auto-reject email failed: {str(e)}")
 
 
 def resolve_status_after_report(
@@ -164,6 +183,7 @@ def resolve_status_after_report(
             f"recruiters/{recruiter_uid}/applications/{recruiter_app_key}"
         ).update(rec_update)
 
+    # Fire email after status is updated
     if overall_score < min_score:
         _send_auto_reject_email(candidate_uid, cand_app, report_payload, overall_score, min_score)
 

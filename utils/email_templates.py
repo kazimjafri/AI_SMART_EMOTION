@@ -7,24 +7,32 @@
 # ===========================
 
 
-def application_accepted_email(candidate_name: str, job_title: str, company: str, recruiter_name: str) -> tuple[str, str]:
-    subject = f"You've Been Shortlisted — {job_title} at {company}"
+def application_accepted_email(candidate_name, job_title, company, recruiter_name):
+    subject = f"You've Been Shortlisted for {job_title} at {company} | © AI SMART EMOTION INTERVIEWER"
     body = f"""Dear {candidate_name},
 
-We are pleased to inform you that your application for the {job_title} position at {company} has been shortlisted.
+Your application for the {job_title} position at {company} has been shortlisted. 
 
-The next step is an AI-conducted interview, which assesses your responses, communication, and confidence in real time. You will have a 48-hour window to complete this interview once it becomes available on your dashboard — please make sure to complete it within that time.
+We would like to invite you to complete a short, AI-driven video interview. You can access the interview directly from your dashboard.
 
-We're looking forward to learning more about you through this process.
+IMPORTANT RULES & REGULATIONS:
+- 1. You have 48 hours to complete this interview from the time you receive this email.
+- 2. A working Webcam and Microphone are mandatory. Ensure you are in a well-lit and quiet room.
+- 3. Do NOT switch tabs during interview.
+- 4. Violations: Switching tabs will result in a warning. A second violation will automatically terminate your interview and flag your application.
+
+Please log in to your dashboard to start the process whenever you are ready.
 
 Best regards,
 {recruiter_name}
-{company}"""
+{company}
+| © AI SMART EMOTION INTERVIEWER
+"""
     return subject, body
 
 
 def application_rejected_email(candidate_name: str, job_title: str, company: str, recruiter_name: str) -> tuple[str, str]:
-    subject = f"Update on Your Application — {job_title} at {company}"
+    subject = f"Update on Your Application — {job_title} at {company} | © AI SMART EMOTION INTERVIEWER "
     body = f"""Dear {candidate_name},
 
 Thank you for your interest in the {job_title} position at {company} and for taking the time to apply.
@@ -35,12 +43,14 @@ We encourage you to apply for future openings that match your profile, and we wi
 
 Warm regards,
 {recruiter_name}
-{company}"""
+{company}
+| © AI SMART EMOTION INTERVIEWER
+"""
     return subject, body
 
 
 def interview_hired_email(candidate_name: str, job_title: str, company: str, recruiter_name: str) -> tuple[str, str]:
-    subject = f"Congratulations! You've Been Selected — {job_title} at {company}"
+    subject = f"Congratulations! You've Been Selected — {job_title} at {company} | © AI SMART EMOTION INTERVIEWER"
     body = f"""Dear {candidate_name},
 
 We are pleased to inform you that after careful review of your AI-conducted interview, you have been selected for the position of {job_title} at {company}.
@@ -53,12 +63,13 @@ Congratulations once again, and welcome aboard!
 
 Best regards,
 {recruiter_name}
-{company}"""
+{company}
+| © AI SMART EMOTION INTERVIEWER"""
     return subject, body
 
 
 def interview_rejected_email(candidate_name: str, job_title: str, company: str, recruiter_name: str) -> tuple[str, str]:
-    subject = f"Update on Your Application — {job_title} at {company}"
+    subject = f"Update on Your Application — {job_title} at {company} | © AI SMART EMOTION INTERVIEWER"
     body = f"""Dear {candidate_name},
 
 Thank you for taking the time to complete the AI interview for the {job_title} position at {company}. We appreciate the effort and thought you put into your responses.
@@ -69,13 +80,14 @@ Please find your interview evaluation report attached — we hope it gives you u
 
 Warm regards,
 {recruiter_name}
-{company}"""
+{company}
+| © AI SMART EMOTION INTERVIEWER"""
     return subject, body
 
 
 def auto_rejected_email(candidate_name: str, job_title: str, company: str, overall_score: int, min_score: int) -> tuple[str, str]:
     """Fixed template — used only for the automatic below-threshold rejection, no recruiter editing."""
-    subject = f"Update on Your Application — {job_title} at {company}"
+    subject = f"Update on Your Application — {job_title} at {company} | © AI SMART EMOTION INTERVIEWER"
     body = f"""Dear {candidate_name},
 
 Thank you for completing the AI interview for the {job_title} position at {company}.
@@ -88,5 +100,6 @@ We encourage you to apply for future openings that match your profile, and we wi
 
 Regards,
 The Recruitment Team
-{company}"""
+{company}
+| © AI SMART EMOTION INTERVIEWER"""
     return subject, body

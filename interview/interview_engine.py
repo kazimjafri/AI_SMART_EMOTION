@@ -265,41 +265,29 @@ def _inject_interview_css():
 # ───────────────────────────────────────────
 # BRIEFING SCREEN
 # ───────────────────────────────────────────
+# ───────────────────────────────────────────
+# BRIEFING SCREEN (INSTRUCTIONS & CAMERA GATE)
+# ───────────────────────────────────────────
+# ───────────────────────────────────────────
+# BRIEFING SCREEN (HARDWARE SETUP ONLY)
+# ───────────────────────────────────────────
 def _render_briefing(job_ctx: dict, profile: dict, webrtc_ctx):
     job_title = job_ctx.get("job_title", "Interview")
     company   = job_ctx.get("company_name", "")
     num_q_est = 5 if profile.get("years_experience", 1) <= 1 else (7 if profile.get("years_experience", 1) <= 3 else 10)
 
     st.markdown(f"""
-    <div class="page-hero">
-      <span class="eyebrow">// AI Interview · Camera + Voice Mode</span>
-      <h1>Ready to begin?</h1>
+    <div class="page-hero" style="padding: 2.5rem 2rem; margin-bottom: 1.5rem;">
+      <span class="eyebrow">// Step 1: Hardware Setup</span>
+      <h1>Camera & Audio Check</h1>
       <p class="sub">
-        <strong>{job_title}</strong>{f' at {company}' if company else ''}<br>
-        {num_q_est} questions &nbsp;·&nbsp; Voice answers &nbsp;·&nbsp; Camera on throughout
+        <strong>{job_title}</strong>{f' at {company}' if company else ''} &nbsp;·&nbsp; {num_q_est} questions
       </p>
     </div>
     """, unsafe_allow_html=True)
 
-    c1, c2, c3 = st.columns(3, gap="medium")
-    tips = [
-        ("🎙️", "Speak clearly", "Press the mic button, answer, then press stop. Speak at a natural pace."),
-        ("📷", "Camera on", "Allow camera access below. Sit in a well-lit area facing the camera."),
-        ("🚨", "Do NOT switch tabs", "Fullscreen is forced. Exiting fullscreen or switching tabs terminates the interview."),
-    ]
-    for col, (icon, title, desc) in zip([c1, c2, c3], tips):
-        with col:
-            st.markdown(f"""
-            <div class="feat-card">
-              <span class="feat-icon">{icon}</span>
-              <div class="feat-title">{title}</div>
-              <div class="feat-desc">{desc}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown('<div class="section-heading">📷 Camera Check</div>', unsafe_allow_html=True)
-    st.caption("Click **START** below and allow camera access when your browser asks.")
+    st.markdown('<div class="section-heading">📷 Enable Your Camera</div>', unsafe_allow_html=True)
+    st.caption("Click **START** on the camera widget above and allow browser permissions to proceed.")
 
     cam_ready = _camera_ready(webrtc_ctx)
 
@@ -314,7 +302,8 @@ def _render_briefing(job_ctx: dict, profile: dict, webrtc_ctx):
 
     bc1, bc2, bc3 = st.columns([1, 1.5, 1])
     with bc2:
-        if st.button("🚀  Begin Interview", use_container_width=True, key="iv2_begin_btn", disabled=not cam_ready):
+        # Button is disabled until camera is ready
+        if st.button("🚀 Begin Interview", use_container_width=True, key="iv2_begin_btn", disabled=not cam_ready):
             if webrtc_ctx and webrtc_ctx.video_processor:
                 webrtc_ctx.video_processor.reset()
             with st.status("🤖 Generating role-specific questions...", expanded=True) as status:
@@ -338,33 +327,58 @@ def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
     # Init violations counter
     if "iv2_violations" not in st.session_state:
         st.session_state.iv2_violations = 0
+
+    # 1. Place the trigger button first so it's in the DOM
+    if st.button("REGISTER_VIOLATION_HIDDEN_BTN", key="hidden_violation_trigger"):
+        st.session_state.iv2_violations += 1
+        st.rerun()
     
-    # ── ANTI-CHEATING: Javascript UI Injection ──
+    # 2. ANTI-CHEATING: Javascript UI Injection (Hides button & tracks tabs)
     components.html(
         """
         <script>
-        // Force fullscreen
+        // A. Immediately hide the trigger button from the candidate
+        const hideButton = () => {
+            const btns = window.parent.document.querySelectorAll('button');
+            btns.forEach(btn => {
+                if(btn.innerText.includes('REGISTER_VIOLATION_HIDDEN_BTN')) {
+                    const container = btn.closest('div[data-testid="stButton"]');
+                    if(container) {
+                        container.style.display = 'none';
+                        container.style.visibility = 'hidden';
+                        container.style.height = '0px';
+                        container.style.margin = '0px';
+                    }
+                }
+            });
+        };
+        // Run immediately and again slightly later to ensure DOM is ready
+        hideButton();
+        setTimeout(hideButton, 50);
+        setTimeout(hideButton, 500);
+
+        // B. Force fullscreen
         if (!document.fullscreenElement) {
             document.documentElement.requestFullscreen().catch(err => {
                 console.log("Fullscreen blocked by browser until user interaction.");
             });
         }
         
-        // Track Visibility Change
+        // C. Track Visibility Change (Tab Switching)
         document.addEventListener("visibilitychange", function() {
             if (document.hidden) {
-                // If user switches tabs, overlay a giant warning forcing them to click
+                // Overlay warning screen
                 const warningDiv = document.createElement("div");
                 warningDiv.id = "cheat-overlay";
                 warningDiv.style = "position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(220, 38, 38, 0.95);z-index:999999;display:flex;flex-direction:column;align-items:center;justify-content:center;color:white;font-family:sans-serif;";
                 warningDiv.innerHTML = `
                     <h1 style="font-size:3rem;margin-bottom:20px;">🚨 VIOLATION DETECTED</h1>
                     <p style="font-size:1.5rem;margin-bottom:30px;">You switched tabs or exited the interview window.</p>
-                    <p style="font-size:1.2rem;">Please click the red button below to acknowledge and return to your interview. Repeated violations will terminate the session.</p>
+                    <p style="font-size:1.2rem;">Please return to your interview immediately. Repeated violations will terminate the session.</p>
                 `;
                 document.body.appendChild(warningDiv);
                 
-                // Programmatically click the hidden Streamlit button to register violation in Python
+                // Programmatically click the hidden button to register violation
                 const btns = window.parent.document.querySelectorAll('button');
                 btns.forEach(btn => {
                     if(btn.innerText.includes('REGISTER_VIOLATION_HIDDEN_BTN')) {
@@ -372,7 +386,7 @@ def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
                     }
                 });
             } else {
-                // Remove overlay when they return
+                // Remove warning screen when candidate returns
                 const overlay = document.getElementById("cheat-overlay");
                 if (overlay) overlay.remove();
             }
@@ -381,14 +395,6 @@ def _render_question_screen(job_ctx: dict, profile: dict, webrtc_ctx):
         """,
         height=0
     )
-    
-    # Hidden button for JS to trigger state change
-    if st.button("REGISTER_VIOLATION_HIDDEN_BTN", key="hidden_violation_trigger"):
-        st.session_state.iv2_violations += 1
-        st.rerun()
-
-    # Apply CSS to hide the button so candidates don't see it
-    st.markdown("""<style>button:contains('REGISTER_VIOLATION_HIDDEN_BTN') { display: none !important; }</style>""", unsafe_allow_html=True)
 
     # Check violations limits
     violations = st.session_state.iv2_violations

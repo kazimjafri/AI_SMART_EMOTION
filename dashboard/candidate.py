@@ -415,6 +415,8 @@ def candidate_profile_tab():
     col_a, col_b = st.columns(2, gap="medium")
     with col_a:
         full_name = st.text_input("Full name", value=profile.get("full_name", st.session_state.user_name), placeholder="Your full name", key="pf_full_name")
+        email = st.text_input("Contact Email", value=profile.get("email", st.session_state.get("user_email", "")), placeholder="you@example.com", key="pf_email")
+        st.caption("// This email is used by recruiters to contact you")
     with col_b:
         existing_photo_b64 = profile.get("profile_photo_b64", "")
         uploaded_photo = st.file_uploader("Profile photo (optional)", type=["jpg", "jpeg", "png", "webp"], key="pf_photo_upload")
@@ -494,6 +496,7 @@ def candidate_profile_tab():
     if save_clicked:
         errors = []
         if not full_name.strip():      errors.append("Full name is required.")
+        if not email.strip():          errors.append("Contact email is required.")
         if not job_role.strip():       errors.append("Target role is required.")
         if not primary_skills.strip(): errors.append("Primary skills are required.")
         for err in errors:
@@ -501,6 +504,7 @@ def candidate_profile_tab():
         if not errors:
             payload = {
                 "full_name":         full_name.strip(),
+                "email":             email.strip(),
                 "profile_photo_b64": profile_photo_b64_final,
                 "job_role":          job_role.strip(),
                 "experience_level":  experience_level,
@@ -516,6 +520,7 @@ def candidate_profile_tab():
             if saved:
                 st.session_state.profile_setup = True
                 st.session_state.user_name = full_name.strip()
+                st.session_state.user_email = email.strip()
                 st.success(f"✅ Profile {'updated' if is_edit else 'saved'}!")
                 time.sleep(0.6)
                 st.rerun()
@@ -672,8 +677,46 @@ def job_search_tab():
 
 
 # ===========================
-# APPLICATION HISTORY TAB
+# APPLICATION HISTORY TAB & MODAL
 # ===========================
+
+@st.dialog("⚠️ Interview Rules & Regulations")
+def show_rules_modal(app, job_title, company, recruiter_uid, app_key):
+    st.markdown("""
+    <div style="padding: 10px 0;">
+        <ul style="font-size: 0.9rem; color: var(--text-body); line-height: 1.8; margin-left: 1rem;">
+            <li><b></b> The interview will be live for only <b>48 hours</b>.</li>
+            <li><b></b> A working <b>Camera</b> and <b>Microphone</b> are mandatory. Sit in a well-lit and quiet room.</li>
+            <li><b>Do NOT switch tabs during interview.</b></li>
+            <li><b>1st Violation:</b> If you switch tabs for the first time, you will receive a strict warning.</li>
+            <li><b>2nd Violation:</b> On the second violation, the interview will be <b>automatically terminated</b>.</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    consent_key = f"modal_consent_{app_key}"
+    consent = st.checkbox("I HAVE READ AND AGREE TO ALL INSTRUCTIONS", key=consent_key)
+    
+    if st.button("🚀 Navigate to Interview", disabled=not consent, use_container_width=True):
+        st.session_state.job_interview_context = {
+            "job_id":             app.get("job_id", ""),
+            "job_title":          job_title,
+            "company_name":       company,
+            "job_description":    app.get("job_description", ""),
+            "core_skills":        app.get("core_skills", []),
+            "min_speech_clarity": app.get("min_speech_clarity", 60),
+            "min_score":          app.get("min_score", 60),
+            "num_questions":      app.get("num_questions", 10),
+            "interview_type":     app.get("interview_type", "Mixed"),
+            "experience_level":   app.get("experience_level", "Mid"),
+            "app_key":            app_key,
+            "recruiter_uid":      recruiter_uid,
+        }
+        st.session_state.iv2_violations = 0
+        st.session_state.terminated_due_to_cheating = False
+        st.session_state.current_page = "interview"
+        st.rerun()
+
 
 def application_history_tab():
     uid = st.session_state.user_uid
@@ -833,46 +876,9 @@ def application_history_tab():
                 
             if "start_interview" in actions:
                 with btn_cols[col_ptr]:
-                    # --- PROCTORING RULES UI & CONSENT CHECKBOX ---
-                    st.markdown("""
-                    <div style="background: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 10px; margin-bottom: 10px;">
-                        <strong style="color: #ef4444; font-size: 0.85rem;">⚠️ Interview Rules & Regulations:</strong>
-                        <ul style="font-size: 0.75rem; color: var(--text-body); margin-top: 5px; padding-left: 20px;">
-                            <li>The interview will be forced into <b>Fullscreen Mode</b>.</li>
-                            <li><b>Do not switch tabs or exit fullscreen</b> during the interview.</li>
-                            <li><b>1st Violation:</b> You will receive a strict warning.</li>
-                            <li><b>2nd Violation:</b> Interview will be terminated and flagged.</li>
-                        </ul>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    consent_key = f"consent_{app_key}"
-                    consent = st.checkbox("I have read and agree to all instructions", key=consent_key)
-                    
-                    if st.button("🎤 Start Interview", key=f"start_int_{app_key}_{idx}", use_container_width=True, disabled=not consent):
-                    
-                        st.session_state.job_interview_context = {
-                            "job_id":             app.get("job_id", ""),
-                            "job_title":          job_title,
-                            "company_name":       company,
-                            "job_description":    app.get("job_description", ""),
-                            "core_skills":        app.get("core_skills", []),
-                            "min_speech_clarity": app.get("min_speech_clarity", 60),
-                            "min_score":          app.get("min_score", 60),
-                            "num_questions":      app.get("num_questions", 10),
-                            "interview_type":     app.get("interview_type", "Mixed"),
-                            "experience_level":   app.get("experience_level", "Mid"),
-                            "app_key":            app_key,
-                            "recruiter_uid":      recruiter_uid,
-                        }
-                        # Initialize anti-cheat trackers
-                        st.session_state.iv2_violations = 0
-                        st.session_state.terminated_due_to_cheating = False
-                        
-                        st.success(f"✅ Context loaded for {job_title}. Launching...")
-                        time.sleep(0.6)
-                        from app import navigate_to
-                        navigate_to("interview")
+                    # Clicking this will open the modal popup
+                    if st.button("🎤 Start Interview", key=f"start_int_{app_key}_{idx}", use_container_width=True):
+                        show_rules_modal(app, job_title, company, recruiter_uid, app_key)
                 col_ptr += 1
                 
             if "download_report" in actions:
@@ -948,7 +954,6 @@ def application_history_tab():
 # ===========================
 # FAKE JOB VERIFIER TAB
 # ===========================
-# (Your original fake_job_verifier_tab() function remains exactly the same below...)
 def fake_job_verifier_tab():
     st.markdown('<div class="section-heading">🔍 Verify Job Posting</div>', unsafe_allow_html=True)
     st.markdown(

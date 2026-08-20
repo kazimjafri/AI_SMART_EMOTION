@@ -117,6 +117,13 @@ def generate_interview_report_pdf(
     story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e2ede8")))
     story.append(Spacer(1, 10))
 
+    # ── Tab Switches Counter (Added right after heading) ──
+    tab_color = "#dc2626" if violations_count > 0 else "#059669"
+    story.append(Paragraph(
+        f"<b>No. of times tabs changed:</b> <font color='{tab_color}'>{violations_count}</font>",
+        ParagraphStyle("TabStyle", parent=styles["Normal"], fontSize=10, textColor=colors.HexColor("#4a7060"), spaceAfter=14)
+    ))
+
     # ── Anti-Cheating Warning Banner ──
     if terminated_due_to_cheating:
         story.append(Paragraph(
@@ -190,8 +197,8 @@ def generate_interview_report_pdf(
         dom_em   = emotion_summary.get("dominant_emotion","Neutral")
         assess   = emotion_summary.get("assessment",     "")
         em_score = emotion_summary.get("overall_score",  50)
-        samples  = emotion_summary.get("total_samples",  0)
 
+        # "Frames Analyzed" row has been removed from this table
         emotion_data = [
             ["Metric",                  "Score",       "Assessment"],
             ["Confidence Level",        f"{avg_conf}%", _score_label(avg_conf)],
@@ -199,7 +206,6 @@ def generate_interview_report_pdf(
             ["Composure",               f"{avg_comp}%", _score_label(avg_comp)],
             ["Dominant Emotion",        dom_em,         ""],
             ["Behavioral Score",        f"{em_score}/100",""],
-            ["Frames Analyzed",         str(samples),   ""],
         ]
         et = Table(emotion_data, colWidths=[2.2 * inch, 1.2 * inch, 2.6 * inch])
         et.setStyle(TableStyle([

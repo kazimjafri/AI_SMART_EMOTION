@@ -107,8 +107,6 @@ def load_interview_report(candidate_uid: str, app_key: str = "") -> dict:
             if snapshot:
                 return snapshot
 
-        # Fallback: no app_key given, or nothing found at that key —
-        # grab the most recent report under this candidate_uid.
         snapshot = realtime_db.reference(f"interview_reports/{candidate_uid}").get()
         if snapshot:
             if "overall_score" in snapshot:
@@ -159,7 +157,6 @@ def _fetch_min_score(candidate_uid: str, cand_app_key: str, fallback: int = 60) 
 
 
 def _build_report_pdf_for_candidate(candidate_uid: str, app_key: str, candidate_name: str) -> bytes:
-    """Fetch a candidate's saved interview report and generate the PDF bytes for emailing."""
     try:
         rpt = realtime_db.reference(f"interview_reports/{candidate_uid}/{app_key}").get()
         if not rpt or not rpt.get("questions_data"):
@@ -180,7 +177,6 @@ def _build_report_pdf_for_candidate(candidate_uid: str, app_key: str, candidate_
             "assessment":       rpt.get("emotion_assessment", ""),
         }
         
-        # Pull anti-cheat flags
         terminated_flag = rpt.get("terminated_due_to_cheating", False)
         violations_count = rpt.get("violations_count", 0)
         
@@ -196,6 +192,17 @@ def _build_report_pdf_for_candidate(candidate_uid: str, app_key: str, candidate_
         )
     except Exception:
         return None
+
+# NAYA HELPER: Pehle profile se email lega, agar nahi mili to login email return karega
+def get_latest_contact_email(uid: str) -> str:
+    """Fetch the explicitly updated contact email from the candidate's profile."""
+    try:
+        profile = realtime_db.reference(f"users/{uid}/candidate_profile").get()
+        if profile and profile.get("email"):
+            return profile.get("email")
+    except Exception:
+        pass
+    return get_candidate_email(uid)
 
 
 # ===========================
@@ -304,7 +311,6 @@ def recruiter_profile_tab():
             unsafe_allow_html=True
         )
 
-    # 🛑 YAHAN SE FORM SHURU (Taake type karne par screen refresh na ho)
     with st.form("recruiter_profile_form"):
         st.markdown('<div class="profile-sec"><span class="ps-num">01</span><span class="ps-title">Company Identity</span><span class="ps-desc">// who you are</span></div>', unsafe_allow_html=True)
         col_a, col_b = st.columns(2, gap="medium")
@@ -340,7 +346,6 @@ def recruiter_profile_tab():
             label = "Save Changes →" if is_edit else "Save Profile →"
             save_clicked = st.form_submit_button(label, use_container_width=True)
 
-    # 🛑 YAHAN FORM SUBMIT HONE KE BAAD DATABASE MEIN SAVE HOGA
     if save_clicked:
         errors = []
         if not company_name.strip():   errors.append("Company name is required.")
@@ -411,7 +416,6 @@ def post_requirements_tab():
         "Onboarding", "Employee Relations", "HRIS software", "Talent Acquisition"
     ]
 
-    # 🛑 YAHAN SE FORM SHURU
     with st.form("post_job_form"):
         st.markdown('<div class="profile-sec"><span class="ps-num">01</span><span class="ps-title">Role Information</span><span class="ps-desc">// the position</span></div>', unsafe_allow_html=True)
         col_a, col_b = st.columns(2, gap="medium")
@@ -434,17 +438,13 @@ def post_requirements_tab():
             st.markdown(f'<div style="margin-top:6px;">{pills}</div>', unsafe_allow_html=True)
         nice_to_have = st.multiselect("Nice-to-have skills (optional)", options=[s for s in ALL_SKILLS if s not in core_skills], key="pr_nice_to_have")
 
-        # AI Interview Thresholds (Section 03)
         st.markdown('<div class="profile-sec"><span class="ps-num">03</span><span class="ps-title">AI Interview Thresholds</span><span class="ps-desc">// evaluation criteria</span></div>', unsafe_allow_html=True)
         col_e, col_f = st.columns(2, gap="medium")
         with col_e:
             min_speech_clarity = st.slider("Minimum speech clarity threshold (%)", 0, 100, 70, 5, key="pr_speech_clarity")
-            # st.caption(f"// candidates below {min_speech_clarity}% clarity will be flagged")
         with col_f:
             min_score = st.slider("Minimum overall AI score (%)", 0, 100, 60, 5, key="pr_min_score")
-            # st.caption(f"// auto-reject below {min_score}% overall score")
 
-        # Interview Length (Section 04 - Separate Row/Col)
         st.markdown('<div class="profile-sec"><span class="ps-num">04</span><span class="ps-title">Interview Questions</span><span class="ps-desc">// question count</span></div>', unsafe_allow_html=True)
         num_questions = st.select_slider(
             "Select number of questions for AI interview",
@@ -470,7 +470,6 @@ def post_requirements_tab():
         with post_col:
             submit_job = st.form_submit_button("📤  Post Job Requirement →", use_container_width=True)
 
-    # 🛑 YAHAN FORM SUBMIT HONE KE BAAD DATABASE MEIN SAVE HOGA
     if submit_job:
         rec_profile = load_recruiter_profile(uid)
         errors = []
@@ -819,7 +818,7 @@ def incoming_applications_tab():
         # ACCEPT (application stage) — invite to AI interview, no PDF
         # ===========================
         if st.session_state.get(f"action_{app_key}") == "accept":
-            candidate_email = get_candidate_email(cand_uid)
+            candidate_email = get_latest_contact_email(cand_uid)
             default_subject, default_body = application_accepted_email(
                 cand_name, job_title, company_name, recruiter_display_name
             )
@@ -870,7 +869,7 @@ def incoming_applications_tab():
         # REJECT (application stage) — no PDF, no interview happened yet
         # ===========================
         if st.session_state.get(f"action_{app_key}") == "reject":
-            candidate_email = get_candidate_email(cand_uid)
+            candidate_email = get_latest_contact_email(cand_uid)
             default_subject, default_body = application_rejected_email(
                 cand_name, job_title, company_name, recruiter_display_name
             )
@@ -921,7 +920,7 @@ def incoming_applications_tab():
         # HIRE (post-interview stage) — with PDF report attached
         # ===========================
         if st.session_state.get(f"action_{app_key}") == "hire":
-            candidate_email = get_candidate_email(cand_uid)
+            candidate_email = get_latest_contact_email(cand_uid)
             default_subject, default_body = interview_hired_email(
                 cand_name, job_title, company_name, recruiter_display_name
             )
@@ -978,7 +977,7 @@ def incoming_applications_tab():
         # REJECT (post-interview stage) — with PDF report attached
         # ===========================
         if st.session_state.get(f"action_{app_key}") == "reject_decision":
-            candidate_email = get_candidate_email(cand_uid)
+            candidate_email = get_latest_contact_email(cand_uid)
             default_subject, default_body = interview_rejected_email(
                 cand_name, job_title, company_name, recruiter_display_name
             )
@@ -1148,7 +1147,6 @@ def interview_reports_hub_tab():
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Find the candidate's own app_key (not recruiter's) for this report
     app_key_for_report = ""
     try:
         rec_apps = realtime_db.reference(f"recruiters/{uid}/applications").get()
@@ -1184,7 +1182,6 @@ def interview_reports_hub_tab():
                 "overall_score":   rpt_fetched.get("emotion_behavioral_score", 50),
                 "assessment":      rpt_fetched.get("emotion_assessment", ""),
             }
-            # Pass flags to generator
             terminated_flag = rpt_fetched.get("terminated_due_to_cheating", False)
             violations_count = rpt_fetched.get("violations_count", 0)
 
@@ -1247,7 +1244,6 @@ def render_recruiter_dashboard():
     if not st.session_state.recruiter_profile_setup:
         st.markdown("""<div class="setup-banner"><span class="banner-icon">🏢</span><div><h3>Set up your recruiter profile</h3><p>Candidates see your company name and details on every job posting you create. Takes 60 seconds — builds trust instantly.</p></div></div>""", unsafe_allow_html=True)
 
-    # Determine active tab via flags
     goto_post    = st.session_state.get("_rec_goto_post", False)
     goto_apps    = st.session_state.get("_rec_goto_applications", False)
     goto_reports = st.session_state.get("_rec_goto_reports", False)
